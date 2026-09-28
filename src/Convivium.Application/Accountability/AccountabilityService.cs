@@ -4,6 +4,7 @@ using Convivium.Application.Abstractions;
 using Convivium.Domain.Billing;
 using Convivium.Domain.Common;
 using Convivium.Domain.Condominiums;
+using Convivium.Domain.Expenses;
 using Convivium.Domain.Finance;
 using Microsoft.EntityFrameworkCore;
 
@@ -121,6 +122,21 @@ public sealed class AccountabilityService(IApplicationDbContext db, IClock clock
             warnings.Add("O saldo final está negativo. Confira os lançamentos antes de apresentar.");
         }
 
+        var aPagar = await ContasAPagarAsync(to, cancellationToken);
+        var aReceber = await ContasAReceberAsync(to, cancellationToken);
+
+        if (aPagar.Count > 0)
+        {
+            decimal total = aPagar.Sum(p => p.Amount);
+
+            if (total > closing)
+            {
+                warnings.Add(
+                    $"Há {Money(total)} em contas a pagar e {Money(closing)} em caixa. " +
+                    "Confira antes de aprovar despesa nova.");
+            }
+        }
+
         return new MonthlyStatement(
             competence.ToString(),
             from,
@@ -137,9 +153,95 @@ public sealed class AccountabilityService(IApplicationDbContext db, IClock clock
             despesas,
             saldos,
             movimento,
+            aPagar,
+            aReceber,
+            FundoDeReserva(saldos, closing),
             await ResumoDaInadimplenciaAsync(to, condominium, cancellationToken),
             warnings);
     }
+
+    /// <summary>
+    /// Contas do condominio ainda nao pagas no fim do periodo.
+    /// </summary>
+    /// <remarks>
+    /// Pelo vencimento, e nao pela competencia: o que interessa aqui e o que
+    /// ja deveria ter saido do caixa, nao a que mes a despesa pertence. Conta
+    /// lancada hoje com vencimento em marco nao e pendencia de janeiro.
+    /// </remarks>
+    private async Task<IReadOnlyList<PendingItem>> ContasAPagarAsync(
+        DateOnly ate,
+        CancellationToken cancellationToken)
+    {
+        var pendentes = await db.Expenses
+            .AsNoTracking()
+            .Include(e => e.Supplier)
+            .Where(e => e.Status == ExpenseStatus.Pending)
+            .Where(e => e.DueDate <= ate)
+            .OrderBy(e => e.DueDate)
+            .ThenByDescending(e => e.Amount)
+            .ToListAsync(cancellationToken);
+
+        return pendentes
+            .Select(e => new PendingItem(
+                e.Description,
+                e.Supplier?.Name,
+                e.DueDate,
+                e.Amount,
+                DiasDeAtraso(e.DueDate, ate)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Cobrancas ainda em aberto no fim do periodo, uma linha por cobranca.
+    /// </summary>
+    /// <remarks>
+    /// Sem multa e juros de proposito: aqui vale o valor nominal, que e o que
+    /// entra no confronto com as contas a pagar. Os encargos apurados ficam no
+    /// resumo de inadimplencia, que responde outra pergunta.
+    /// </remarks>
+    private async Task<IReadOnlyList<PendingItem>> ContasAReceberAsync(
+        DateOnly ate,
+        CancellationToken cancellationToken)
+    {
+        var abertas = await db.Charges
+            .AsNoTracking()
+            .Include(c => c.Unit).ThenInclude(u => u.Block)
+            .Where(c => c.Status != ChargeStatus.Paid && c.Status != ChargeStatus.Cancelled)
+            .Where(c => c.DueDate <= ate)
+            .OrderBy(c => c.DueDate)
+            .ToListAsync(cancellationToken);
+
+        return abertas
+            .Select(c => new PendingItem(
+                $"Cobrança de {c.Competence}",
+                c.Unit?.FullIdentifier,
+                c.DueDate,
+                c.OutstandingAmount,
+                DiasDeAtraso(c.DueDate, ate)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Junta as contas carimbadas como fundo de reserva numa linha so.
+    /// </summary>
+    private static ReserveFundBalance FundoDeReserva(
+        IReadOnlyList<StatementAccountBalance> contas,
+        decimal saldoTotal)
+    {
+        var fundo = contas.Where(c => c.IsReserveFund).ToList();
+
+        decimal fechamento = fundo.Sum(c => c.Closing);
+
+        return new ReserveFundBalance(
+            fundo.Sum(c => c.Opening),
+            fundo.Sum(c => c.In),
+            fundo.Sum(c => c.Out),
+            fechamento,
+            saldoTotal > 0 ? fechamento / saldoTotal : 0m);
+    }
+
+    private static int DiasDeAtraso(DateOnly vencimento, DateOnly referencia) =>
+        referencia > vencimento ? referencia.DayNumber - vencimento.DayNumber : 0;
 
     /// <summary>
     /// O que estava vencido e em aberto no ultimo dia do periodo.
