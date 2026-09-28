@@ -93,6 +93,15 @@ public sealed class StatementPdfRenderer : IStatementRenderer
                 column.Item().Element(box => Avisos(box, s));
             }
 
+            // Lancamento por lancamento, numerado, nas duas colunas. E o
+            // formato que o condomino brasileiro reconhece de qualquer
+            // balancete, e o que ele procura quando questiona uma conta.
+            column.Item().Element(box => CreditosEDebitos(box, s));
+
+            column.Item().PageBreak();
+
+            // Daqui em diante, a leitura de quem analisa: o mesmo dinheiro
+            // agrupado por conta, onde ele esta, e o que ficou pendente.
             column.Item().Row(row =>
             {
                 row.RelativeItem().Element(cell => Movimentos(cell, "Receitas", s.Income, s.TotalIncome));
@@ -101,13 +110,9 @@ public sealed class StatementPdfRenderer : IStatementRenderer
             });
 
             column.Item().Element(box => Contas(box, s));
-            column.Item().Element(box => Inadimplencia(box, s));
-
-            if (s.Entries.Count > 0)
-            {
-                column.Item().PageBreak();
-                column.Item().Element(box => Anexo(box, s));
-            }
+            column.Item().Element(box => Fundo(box, s));
+            column.Item().Element(box => Pendencias(box, s));
+            column.Item().Element(Confidencialidade);
         });
     }
 
@@ -243,97 +248,268 @@ public sealed class StatementPdfRenderer : IStatementRenderer
             });
         });
 
-    private static void Inadimplencia(IContainer container, MonthlyStatement s) =>
+    /// <summary>
+    /// O fundo de reserva em destaque, e nao diluido entre as contas.
+    /// </summary>
+    /// <remarks>
+    /// E a primeira pergunta de qualquer assembleia, e a lei trata este
+    /// dinheiro como separado: tem destinacao propria, definida em convencao,
+    /// e nao se confunde com o caixa de operacao.
+    /// </remarks>
+    private static void Fundo(IContainer container, MonthlyStatement s)
+    {
+        ReserveFundBalance f = s.ReserveFund;
+
+        if (f.Opening == 0 && f.Closing == 0 && f.In == 0)
+        {
+            return;
+        }
+
+        container.Background("#f0fdfa").Border(1).BorderColor("#99f6e4").Padding(12).Row(row =>
+        {
+            row.RelativeItem().Column(col =>
+            {
+                col.Item().Text("Fundo de reserva")
+                    .FontSize(9).SemiBold().FontColor(Accent);
+
+                col.Item().PaddingTop(2).Text(text =>
+                {
+                    text.Span($"R$ {Money(f.Closing)}").FontSize(15).SemiBold().FontColor(Ink);
+                    text.Span($"   {f.ShareOfTotal * 100:0}% do saldo do condomínio")
+                        .FontSize(8).FontColor(Muted);
+                });
+            });
+
+            row.ConstantItem(300).AlignRight().Text(text =>
+            {
+                text.Span("Anterior ").FontSize(8).FontColor(Muted);
+                text.Span($"R$ {Money(f.Opening)}").FontSize(8.5f);
+                text.Span("   ·   Entrou ").FontSize(8).FontColor(Muted);
+                text.Span($"R$ {Money(f.In)}").FontSize(8.5f).FontColor(Accent);
+                text.Span("   ·   Saiu ").FontSize(8).FontColor(Muted);
+                text.Span($"R$ {Money(f.Out)}").FontSize(8.5f).FontColor(f.Out > 0 ? Danger : Ink);
+            });
+        });
+    }
+
+    /// <summary>
+    /// O que o condominio deve e o que tem a receber no fim do periodo.
+    /// </summary>
+    /// <remarks>
+    /// Sem isto o saldo engana: R$ 16 mil em caixa com R$ 20 mil vencendo e
+    /// uma situacao bem diferente dos mesmos R$ 16 mil sem dever nada. As
+    /// duas colunas juntas sao o que permite ao conselho decidir se aprova
+    /// uma despesa nova.
+    /// </remarks>
+    private static void Pendencias(IContainer container, MonthlyStatement s) =>
+        container.Row(row =>
+        {
+            row.RelativeItem().Element(cell => ListaDePendencias(
+                cell, "Contas a pagar", s.Payables, "Fornecedor", Danger));
+
+            row.ConstantItem(16);
+
+            row.RelativeItem().Element(cell => ListaDePendencias(
+                cell, "Contas a receber", s.Receivables, "Unidade", Accent, s.Delinquency));
+        });
+
+    private static void ListaDePendencias(
+        IContainer container,
+        string titulo,
+        IReadOnlyList<PendingItem> itens,
+        string rotuloDaContraparte,
+        string cor,
+        DelinquencySummary? inadimplencia = null) =>
         container.Column(column =>
         {
-            column.Item().Text("Inadimplência").FontSize(11).SemiBold();
-
-            if (s.Delinquency.Units == 0)
+            column.Item().Row(cabecalho =>
             {
-                column.Item().PaddingTop(4)
-                    .Text("Nenhuma cobrança vencida em aberto no fim do período.")
-                    .FontSize(9).FontColor(Muted);
+                cabecalho.RelativeItem().Text(titulo).FontSize(11).SemiBold();
+                cabecalho.ConstantItem(90).AlignRight()
+                    .Text($"R$ {Money(itens.Sum(i => i.Amount))}")
+                    .FontSize(11).SemiBold().FontColor(itens.Count > 0 ? cor : Muted);
+            });
+
+            if (itens.Count == 0)
+            {
+                column.Item().PaddingTop(4).Text("Nada pendente no fim do período.")
+                    .FontSize(8.5f).FontColor(Muted);
                 return;
             }
 
-            column.Item().PaddingTop(4).Text(text =>
-            {
-                text.Span($"{s.Delinquency.Units} unidade(s)").FontSize(9).SemiBold();
-                text.Span(" com ").FontSize(9).FontColor(Muted);
-                text.Span($"R$ {Money(s.Delinquency.Outstanding)}").FontSize(9).SemiBold().FontColor(Danger);
-                text.Span(" em aberto, mais ").FontSize(9).FontColor(Muted);
-                text.Span($"R$ {Money(s.Delinquency.LateCharges)}").FontSize(9).SemiBold();
-                text.Span(" de multa e juros apurados até ").FontSize(9).FontColor(Muted);
-                text.Span($"{s.To:dd/MM/yyyy}").FontSize(9).FontColor(Muted);
-                text.Span(".").FontSize(9).FontColor(Muted);
-            });
-        });
-
-    /// <summary>Lancamento por lancamento, para quem quiser conferir.</summary>
-    private static void Anexo(IContainer container, MonthlyStatement s) =>
-        container.Column(column =>
-        {
-            column.Item().Text("Movimento do período").FontSize(11).SemiBold();
-            column.Item().PaddingTop(2)
-                .Text("Todos os lançamentos do caixa, na ordem em que o dinheiro se moveu.")
-                .FontSize(8).FontColor(Muted);
-
-            column.Item().PaddingTop(8).Table(table =>
+            column.Item().PaddingTop(6).Table(table =>
             {
                 table.ColumnsDefinition(columns =>
                 {
-                    columns.ConstantColumn(48);
                     columns.RelativeColumn();
-                    columns.ConstantColumn(96);
-                    columns.ConstantColumn(80);
+                    columns.ConstantColumn(44);
+                    columns.ConstantColumn(72);
                 });
 
                 table.Header(header =>
                 {
-                    header.Cell().Element(HeaderCell).Text("Data");
-                    header.Cell().Element(HeaderCell).Text("Histórico");
-                    header.Cell().Element(HeaderCell).Text("Conta");
+                    header.Cell().Element(HeaderCell).Text(rotuloDaContraparte);
+                    header.Cell().Element(HeaderCell).Text("Venc.");
                     header.Cell().Element(HeaderCell).AlignRight().Text("Valor (R$)");
                 });
 
-                foreach (StatementEntry lancamento in s.Entries)
+                foreach (PendingItem item in itens)
                 {
-                    table.Cell().Element(BodyCell)
-                        .Text($"{lancamento.Date:dd/MM}").FontSize(8.5f).FontColor(Muted);
+                    table.Cell().Element(BodyCell).Column(celula =>
+                    {
+                        celula.Item().Text(item.Counterpart ?? "Não informado").FontSize(8.5f);
+                        celula.Item().Text(item.Description).FontSize(7).FontColor(Muted);
+                    });
 
                     table.Cell().Element(BodyCell).Column(celula =>
                     {
+                        celula.Item().Text($"{item.DueDate:dd/MM}").FontSize(8);
+
+                        // Dias de atraso na data do balancete, e nao de hoje:
+                        // o documento precisa dizer sempre a mesma coisa.
+                        if (item.DaysLate > 0)
+                        {
+                            celula.Item().Text($"{item.DaysLate}d").FontSize(7).FontColor(Danger);
+                        }
+                    });
+
+                    table.Cell().Element(BodyCell).AlignRight().AlignMiddle()
+                        .Text(Money(item.Amount)).FontSize(8.5f);
+                }
+            });
+
+            // Multa e juros vivem aqui, e nao numa secao propria: sao a mesma
+            // divida vista de outro angulo, e separa-las rendia uma secao de
+            // duas linhas sozinha no fim do documento.
+            if (inadimplencia is { Units: > 0 } atraso)
+            {
+                column.Item().PaddingTop(5).Text(text =>
+                {
+                    text.Span($"{atraso.Units} unidade(s) em atraso, com ")
+                        .FontSize(7.5f).FontColor(Muted);
+                    text.Span($"R$ {Money(atraso.LateCharges)}").FontSize(7.5f).SemiBold();
+                    text.Span(" de multa e juros apurados até a data do balancete.")
+                        .FontSize(7.5f).FontColor(Muted);
+                });
+            }
+        });
+
+    /// <summary>
+    /// Creditos e debitos, um por linha, numerados, em duas colunas.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// E o formato tradicional do balancete de condominio, e nao e capricho:
+    /// e por ele que o condomino acha a conta que quer questionar. Agrupar
+    /// por conta contabil responde "no que foi o dinheiro"; so a lista
+    /// responde "quanto foi pago ao eletricista no dia 12".
+    /// </para>
+    /// <para>
+    /// As duas colunas sao independentes — a numeracao de cada lado comeca do
+    /// 1 e nao ha relacao entre a linha 3 da esquerda e a da direita.
+    /// </para>
+    /// </remarks>
+    private static void CreditosEDebitos(IContainer container, MonthlyStatement s) =>
+        container.Row(row =>
+        {
+            row.RelativeItem().Element(cell => Coluna(
+                cell, "Créditos", s.Entries.Where(e => e.IsIncome).ToList(), s.TotalIncome, Accent));
+
+            row.ConstantItem(18);
+
+            row.RelativeItem().Element(cell => Coluna(
+                cell, "Débitos", s.Entries.Where(e => !e.IsIncome).ToList(), s.TotalExpense, Ink));
+        });
+
+    private static void Coluna(
+        IContainer container,
+        string titulo,
+        IReadOnlyList<StatementEntry> lancamentos,
+        decimal total,
+        string cor) =>
+        container.Column(column =>
+        {
+            column.Item().BorderBottom(1).BorderColor(Ink).PaddingBottom(4).Row(cabecalho =>
+            {
+                cabecalho.RelativeItem().Text(titulo)
+                    .FontSize(10).SemiBold().FontColor(cor).LetterSpacing(0.04f);
+                cabecalho.ConstantItem(70).AlignRight().Text("Valor (R$)")
+                    .FontSize(7.5f).SemiBold().FontColor(Muted).LetterSpacing(0.06f);
+            });
+
+            if (lancamentos.Count == 0)
+            {
+                column.Item().PaddingTop(6)
+                    .Text($"Nenhum {titulo.TrimEnd('s').ToLower(Brazil)} no período.")
+                    .FontSize(8.5f).FontColor(Muted);
+                return;
+            }
+
+            int numero = 0;
+
+            foreach (StatementEntry lancamento in lancamentos)
+            {
+                numero++;
+
+                column.Item().BorderBottom(1).BorderColor(Line).PaddingVertical(4).Row(linha =>
+                {
+                    linha.ConstantItem(16).Text($"{numero}")
+                        .FontSize(7.5f).FontColor(Muted);
+
+                    linha.RelativeItem().Column(celula =>
+                    {
                         celula.Item().Text(lancamento.Description).FontSize(8.5f);
 
-                        // Conta bancaria e documento nao cabem em coluna propria
-                        // sem espremer o historico, e sao o que se procura quando
-                        // um lancamento e questionado.
-                        string rodape = lancamento.BankAccountName;
+                        // Data, conta e documento em subtexto: e o que se
+                        // procura quando um lancamento e questionado, e nao
+                        // cabe em coluna propria sem espremer o historico.
+                        string detalhe = $"{lancamento.Date:dd/MM} · {lancamento.BankAccountName}";
 
                         if (!string.IsNullOrWhiteSpace(lancamento.DocumentNumber))
                         {
-                            rodape += $" · doc. {lancamento.DocumentNumber}";
+                            detalhe += $" · doc. {lancamento.DocumentNumber}";
                         }
 
                         if (!lancamento.Reconciled)
                         {
-                            rodape += " · não conferido";
+                            detalhe += " · não conferido";
                         }
 
-                        celula.Item().Text(rodape).FontSize(7).FontColor(Muted);
+                        celula.Item().Text(detalhe).FontSize(6.5f).FontColor(Muted);
                     });
 
-                    table.Cell().Element(BodyCell)
-                        .Text(lancamento.AccountName).FontSize(7.5f).FontColor(Muted);
+                    linha.ConstantItem(70).AlignRight().AlignMiddle()
+                        .Text(Money(lancamento.Amount)).FontSize(8.5f);
+                });
+            }
 
-                    // O sinal na frente evita a duvida de qual coluna era qual
-                    // quando alguem le so o anexo, solto do resto.
-                    table.Cell().Element(BodyCell).AlignRight()
-                        .Text((lancamento.IsIncome ? "+" : "−") + Money(lancamento.Amount))
-                        .FontSize(8.5f).FontColor(lancamento.IsIncome ? Accent : Ink);
-                }
+            column.Item().PaddingTop(6).Row(rodape =>
+            {
+                rodape.ConstantItem(16);
+                rodape.RelativeItem().Text("TOTAL")
+                    .FontSize(8.5f).SemiBold().LetterSpacing(0.04f);
+                rodape.ConstantItem(70).AlignRight().Text(Money(total))
+                    .FontSize(10).SemiBold().FontColor(cor);
             });
         });
+
+    /// <summary>
+    /// A ressalva que todo balancete de condominio carrega.
+    /// </summary>
+    /// <remarks>
+    /// O documento traz nome de unidade e valor em aberto. E prestacao de
+    /// contas, nao lista de devedores para circular em grupo de WhatsApp — e
+    /// expor condomino inadimplente ja rendeu condenacao por dano moral.
+    /// </remarks>
+    private static void Confidencialidade(IContainer container) =>
+        // ShowEntire para a nota nunca partir no meio: uma frase sobre
+        // constranger condomino cortada ao meio da pagina diz o contrario do
+        // que pretende. Curta o bastante para caber junto do resto.
+        container.ShowEntire().Text(
+            "Documento destinado aos condôminos e ao conselho fiscal. Não é permitida a " +
+            "divulgação a terceiros nem o uso como forma de constrangimento ou exposição " +
+            "de qualquer condômino.")
+            .FontSize(7).FontColor(Muted);
 
     private static void ComposeFooter(IContainer container) =>
         container.PaddingTop(10).BorderTop(1).BorderColor(Line).PaddingTop(6).Row(row =>
