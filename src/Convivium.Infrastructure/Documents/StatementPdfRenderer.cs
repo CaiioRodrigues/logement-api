@@ -343,7 +343,7 @@ public sealed class StatementPdfRenderer : IStatementRenderer
                 text.Span("Emitido em ").FontSize(7.5f).FontColor(Muted);
                 text.Span(DateTime.Now.ToString("dd/MM/yyyy 'às' HH:mm", Brazil))
                     .FontSize(7.5f).FontColor(Muted);
-                text.Span("  ·  Documento gerado pelo sistema de gestão do condomínio.")
+                text.Span("  ·  Documento gerado pela Logement Administradora.")
                     .FontSize(7.5f).FontColor(Muted);
             });
 

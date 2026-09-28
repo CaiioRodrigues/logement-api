@@ -1,10 +1,14 @@
-# Convivium API
+# Logement · API
 
-Gestão de condomínios: caixa, rateio mensal, cobranças com PIX, leitura
-automática de contas de concessionária e prestação de contas.
+Sistema da **Logement Administradora**: caixa, rateio mensal, cobranças com
+PIX, leitura automática de contas de concessionária e prestação de contas.
 
-API em **ASP.NET Core 10** sobre **PostgreSQL**. O front (`convivium-web`,
+API em **ASP.NET Core 10** sobre **PostgreSQL**. O portal (`convivium-web`,
 Next.js) consome esta API.
+
+> Os repositórios e os namespaces continuam com o nome antigo, `convivium`.
+> É só identificador interno — renomear pastas e `namespace` em 167 arquivos
+> não muda nada para quem usa, e quebraria todo histórico de `git blame`.
 
 ---
 
