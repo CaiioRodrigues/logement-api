@@ -13,9 +13,9 @@ public sealed record OutgoingEmail
     /// Nome que aparece como remetente. Nulo usa o nome geral da configuracao.
     /// </summary>
     /// <remarks>
-    /// E o nome do condominio, nao o do sistema. O morador reconhece o predio
-    /// dele; "Convivium" nao diz nada para quem nunca ouviu falar do software,
-    /// e num e-mail que cobra dinheiro remetente estranho vira golpe.
+    /// E o nome do condominio, nao o da administradora. O morador reconhece o
+    /// predio dele; "Logement" nao diz nada para quem nunca ouviu falar da
+    /// empresa, e num e-mail que cobra dinheiro remetente estranho vira golpe.
     /// </remarks>
     public string? FromName { get; init; }
 

@@ -90,12 +90,12 @@ public sealed class DemoDataSeeder(
     }
 
     /// <summary>Nome do condominio de demonstracao. E por ele que o seed sabe se ja rodou.</summary>
-    public const string DemoName = "Residencial Convivium";
+    public const string DemoName = "Residencial Modelo";
 
     private static Condominium CreateCondominium() => new()
     {
         Name = DemoName,
-        LegalName = "Condomínio do Edifício Residencial Convivium",
+        LegalName = "Condomínio do Edifício Residencial Modelo",
         Cnpj = "12345678000195",
         Address = new Address
         {

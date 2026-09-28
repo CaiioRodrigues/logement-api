@@ -474,7 +474,7 @@ public sealed class PeopleService(
             .FirstOrDefaultAsync(cancellationToken);
 
         EmailContent conteudo = composer.ComposePasswordReset(
-            condominio?.Name ?? "Convivium",
+            condominio?.Name ?? "Logement",
             pessoa.Name,
             BuildInviteUrl(token),
             PasswordResetLifetime);

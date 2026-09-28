@@ -7,7 +7,7 @@ using Convivium.Domain.Common;
 /// </summary>
 public class Condominium : Entity
 {
-    /// <summary>Nome pelo qual o condominio e conhecido. Ex.: "Residencial Convivium".</summary>
+    /// <summary>Nome pelo qual o condominio e conhecido. Ex.: "Residencial Aurora".</summary>
     public string Name { get; set; } = string.Empty;
 
     /// <summary>Razao social registrada na Receita.</summary>
