@@ -107,6 +107,16 @@ public sealed class BillingController(BillingService billing) : ApiControllerBas
         CancellationToken cancellationToken)
         => Ok(await billing.RegisterPaymentAsync(id, request, Tenant.PersonId, cancellationToken));
 
+    /// <summary>Desfaz o ultimo recebimento e remove a entrada do caixa.</summary>
+    [HttpPost("{id:guid}/estornar-recebimento")]
+    [Authorize(Policy = ConviviumPolicies.Finance)]
+    [ProducesResponseType<ChargeDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<ActionResult<ChargeDto>> ReversePayment(
+        Guid id,
+        CancellationToken cancellationToken)
+        => Ok(await billing.ReversePaymentAsync(id, cancellationToken));
+
     /// <summary>Cobranca avulsa: reserva de salao, multa por infracao, segunda via.</summary>
     [HttpPost("avulsa")]
     [Authorize(Policy = ConviviumPolicies.Finance)]

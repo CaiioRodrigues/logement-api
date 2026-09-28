@@ -369,6 +369,74 @@ public sealed class BillingService(
     }
 
     /// <summary>
+    /// Desfaz o ultimo recebimento de uma cobranca.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Desfaz o mais recente, e nao todos: e o Ctrl+Z de quem marcou a linha
+    /// errada ou digitou o valor errado. Quem lancou tres parciais e quer
+    /// zerar clica tres vezes, o que e explicito; apagar tudo de uma vez seria
+    /// destrutivo demais para um botao que se aperta sem pensar.
+    /// </para>
+    /// <para>
+    /// Recusa quando o lancamento ja foi conferido contra o extrato. Apagar
+    /// um lancamento conciliado deixa o sistema divergindo do banco em
+    /// silencio, e silencio e o pior jeito de descobrir isso.
+    /// </para>
+    /// </remarks>
+    public async Task<ChargeDto> ReversePaymentAsync(
+        Guid chargeId,
+        CancellationToken cancellationToken = default)
+    {
+        Charge charge = await db.Charges
+            .Include(c => c.Items)
+            .FirstOrDefaultAsync(c => c.Id == chargeId, cancellationToken)
+            ?? throw new KeyNotFoundException("Cobrança não encontrada.");
+
+        Payment? payment = await db.Payments
+            .Where(p => p.ChargeId == charge.Id)
+            .OrderByDescending(p => p.PaidOn)
+            .ThenByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        DomainException.ThrowIf(
+            payment is null,
+            "Esta cobrança não tem recebimento para estornar.");
+
+        LedgerEntry? entry = await db.LedgerEntries
+            .FirstOrDefaultAsync(e => e.PaymentId == payment!.Id, cancellationToken);
+
+        DomainException.ThrowIf(
+            entry?.ReconciledAt is not null,
+            "Este recebimento já foi conferido contra o extrato bancário e não pode ser " +
+            "estornado. Lance um ajuste no caixa para corrigir.");
+
+        if (entry is not null)
+        {
+            db.LedgerEntries.Remove(entry);
+        }
+
+        db.Payments.Remove(payment!);
+
+        charge.PaidAmount -= payment!.Amount;
+
+        if (charge.PaidAmount < 0)
+        {
+            charge.PaidAmount = 0;
+        }
+
+        // Volta para "em aberto" ou "parcial" conforme o que sobrou. Nao
+        // precisa decidir entre aberta e vencida: o status vencido e derivado
+        // da data na hora de montar o DTO, e nao gravado.
+        charge.Status = charge.PaidAmount > 0 ? ChargeStatus.PartiallyPaid : ChargeStatus.Open;
+        charge.PaidOn = null;
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        return await GetChargeAsync(charge.Id, cancellationToken);
+    }
+
+    /// <summary>
     /// Cobranca acessada pelo link publico do e-mail, sem login.
     /// </summary>
     /// <remarks>
