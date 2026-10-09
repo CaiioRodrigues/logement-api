@@ -104,7 +104,9 @@ public sealed record ChargeDto(
     decimal LateFee,
     decimal Interest,
     decimal TotalWithLateCharges,
-    IReadOnlyList<ChargeItemDto> Items);
+    IReadOnlyList<ChargeItemDto> Items,
+    /// <summary>Boleto registrado em banco. Nulo quando a cobranca e so PIX.</summary>
+    Banking.BankSlipDto? Slip = null);
 
 public sealed record ChargeFilter
 {

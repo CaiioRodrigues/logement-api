@@ -176,5 +176,34 @@ public sealed record BoletoRegistration
 /// Deu errado do lado do banco. Carrega a mensagem que o banco devolveu para
 /// o sindico ver o motivo real, em vez de um "erro ao emitir boleto".
 /// </summary>
-public sealed class BoletoProviderException(string message, Exception? innerException = null)
-    : Exception(message, innerException);
+public sealed class BoletoProviderException(
+    string message,
+    Exception? innerException = null,
+    bool outcomeUnknown = false) : Exception(message, innerException)
+{
+    /// <summary>
+    /// O pedido pode ter chegado ao banco mesmo com o erro.
+    /// </summary>
+    /// <remarks>
+    /// Acontece quando a conexao cai ou o banco demora a responder depois de
+    /// receber uma emissao. Tentar de novo as cegas pode registrar dois titulos
+    /// para a mesma cobranca — e o morador recebe dois boletos validos. Nesses
+    /// casos a cobranca fica travada ate alguem conferir no internet banking.
+    /// </remarks>
+    public bool OutcomeUnknown { get; } = outcomeUnknown;
+}
+
+/// <summary>
+/// Entrega o <see cref="HttpClient"/> ja com o certificado mTLS do condominio.
+/// </summary>
+/// <remarks>
+/// Separado do adaptador para os testes trocarem o transporte por um falso
+/// e conferirem como a resposta do banco e lida, sem certificado nem rede.
+/// </remarks>
+public interface IBankHttpClientSource
+{
+    HttpClient Get(BankCredentials credentials);
+
+    /// <summary>Descarta o cliente do condominio quando a credencial muda.</summary>
+    void Invalidate(string cacheKey);
+}

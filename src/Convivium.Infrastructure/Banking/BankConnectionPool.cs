@@ -22,7 +22,7 @@ using Microsoft.Extensions.Options;
 /// uma entrada nova em vez de reaproveitar a conexao antiga.
 /// </para>
 /// </remarks>
-public sealed class BankConnectionPool(IOptions<InterOptions> options) : IDisposable
+public sealed class BankConnectionPool(IOptions<InterOptions> options) : IBankHttpClientSource, IDisposable
 {
     /// <summary>
     /// Teto de clientes vivos. Com mais condominios que isto, o mapa e

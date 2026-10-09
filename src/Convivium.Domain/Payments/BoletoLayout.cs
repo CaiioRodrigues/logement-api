@@ -242,6 +242,33 @@ public static class BoletoLayout
             line[33..]);
     }
 
+    /// <summary>
+    /// O codigo do banco com o digito verificador, como sai no cabecalho da
+    /// ficha de compensacao. Ex.: "077" vira "077-9".
+    /// </summary>
+    /// <remarks>
+    /// Modulo 11 com pesos 2, 3 e 4 da direita para a esquerda; quando o
+    /// resultado da 10 ou 11, o digito e 0 — e o caso da Caixa (104-0).
+    /// </remarks>
+    public static string BankCodeWithCheckDigit(string bankCode)
+    {
+        string bank = Digits(bankCode, nameof(bankCode));
+        DomainException.ThrowIf(bank.Length != 3, "O código do banco tem 3 dígitos.");
+
+        int sum = 0;
+        int weight = 2;
+
+        for (int i = bank.Length - 1; i >= 0; i--)
+        {
+            sum += (bank[i] - '0') * weight;
+            weight++;
+        }
+
+        int checkDigit = 11 - (sum % 11);
+
+        return $"{bank}-{(checkDigit > 9 ? 0 : checkDigit)}";
+    }
+
     // --- Leitura ---
 
     /// <summary>

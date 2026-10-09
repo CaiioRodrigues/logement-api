@@ -5,6 +5,8 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Convivium.Application.Abstractions;
 using Convivium.Application.Banking;
@@ -32,7 +34,7 @@ using BoletoProviderKind = Convivium.Domain.Condominiums.BoletoProvider;
 /// </para>
 /// </remarks>
 public sealed class InterBoletoProvider(
-    BankConnectionPool pool,
+    IBankHttpClientSource pool,
     IOptions<InterOptions> options,
     IClock clock,
     ILogger<InterBoletoProvider> logger) : IBoletoProvider
@@ -63,7 +65,8 @@ public sealed class InterBoletoProvider(
             CobrancaPath,
             credentials,
             JsonContent.Create(BuildEmissionBody(request)),
-            cancellationToken);
+            cancellationToken,
+            createsTitle: true);
 
         string externalId = FindString(response.RootElement, "codigoSolicitacao")
             ?? throw new BoletoProviderException(
@@ -361,15 +364,20 @@ public sealed class InterBoletoProvider(
 
     // --- Transporte ---
 
+    /// <param name="createsTitle">
+    /// A chamada registra um titulo. Se ela falhar depois de sair daqui, nao
+    /// da para saber se o banco registrou — e o erro precisa dizer isso.
+    /// </param>
     private async Task<JsonDocument> SendAsync(
         HttpMethod method,
         string path,
         BankCredentials credentials,
         HttpContent? content,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool createsTitle = false)
     {
         HttpResponseMessage response = await SendOnceAsync(
-            method, path, credentials, content, forceRefreshToken: false, cancellationToken);
+            method, path, credentials, content, forceRefreshToken: false, createsTitle, cancellationToken);
 
         // Um 401 depois de um token em cache quer dizer token revogado do lado
         // do banco: vale uma segunda tentativa com token novo antes de desistir.
@@ -378,7 +386,7 @@ public sealed class InterBoletoProvider(
             response.Dispose();
 
             response = await SendOnceAsync(
-                method, path, credentials, content: null, forceRefreshToken: true, cancellationToken);
+                method, path, credentials, content: null, forceRefreshToken: true, createsTitle, cancellationToken);
         }
 
         using (response)
@@ -387,7 +395,14 @@ public sealed class InterBoletoProvider(
 
             if (!response.IsSuccessStatusCode)
             {
-                throw new BoletoProviderException(DescribeFailure(response.StatusCode, body));
+                // Um 5xx numa emissao nao garante que nada foi gravado: o banco
+                // pode ter registrado o titulo e falhado so ao responder.
+                bool unknown = createsTitle && (int)response.StatusCode >= 500;
+
+                throw new BoletoProviderException(
+                    DescribeFailure(response.StatusCode, body),
+                    innerException: null,
+                    outcomeUnknown: unknown);
             }
 
             if (string.IsNullOrWhiteSpace(body))
@@ -415,6 +430,7 @@ public sealed class InterBoletoProvider(
         BankCredentials credentials,
         HttpContent? content,
         bool forceRefreshToken,
+        bool createsTitle,
         CancellationToken cancellationToken)
     {
         string token = await GetTokenAsync(credentials, forceRefreshToken, cancellationToken);
@@ -434,15 +450,23 @@ public sealed class InterBoletoProvider(
         catch (HttpRequestException exception)
         {
             throw new BoletoProviderException(
-                "Não consegui falar com o Banco Inter. Confira a conexão do servidor " +
-                "e se o certificado do condomínio ainda está válido.",
-                exception);
+                createsTitle
+                    ? "A conexão com o Banco Inter caiu durante a emissão. O boleto pode " +
+                      "ter sido registrado: confira no internet banking antes de emitir de novo."
+                    : "Não consegui falar com o Banco Inter. Confira a conexão do servidor " +
+                      "e se o certificado do condomínio ainda está válido.",
+                exception,
+                outcomeUnknown: createsTitle);
         }
         catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw new BoletoProviderException(
-                "O Banco Inter demorou demais para responder. Tente de novo em alguns minutos.",
-                exception);
+                createsTitle
+                    ? "O Banco Inter não respondeu a tempo à emissão. O boleto pode ter " +
+                      "sido registrado: confira no internet banking antes de emitir de novo."
+                    : "O Banco Inter demorou demais para responder. Tente de novo em alguns minutos.",
+                exception,
+                outcomeUnknown: createsTitle);
         }
     }
 
@@ -530,8 +554,10 @@ public sealed class InterBoletoProvider(
     {
         DateTimeOffset now = clock.Now;
 
+        string key = TokenKey(credentials);
+
         if (!forceRefresh
-            && tokens.TryGetValue(credentials.CacheKey, out CachedToken? cached)
+            && tokens.TryGetValue(key, out CachedToken? cached)
             && cached.ExpiresAt > now + TokenSafetyMargin)
         {
             return cached.Value;
@@ -581,14 +607,20 @@ public sealed class InterBoletoProvider(
 
             int lifetime = (int?)FindDecimal(document.RootElement, "expires_in") ?? 3_600;
 
-            tokens[credentials.CacheKey] = new CachedToken(accessToken, now.AddSeconds(lifetime));
+            tokens[key] = new CachedToken(accessToken, now.AddSeconds(lifetime));
 
             return accessToken;
         }
     }
 
-    /// <summary>Esquece o token deste condominio: usado quando a credencial muda.</summary>
-    public void Forget(string cacheKey) => tokens.TryRemove(cacheKey, out _);
+    /// <summary>
+    /// A chave do cache leva um resumo das proprias credenciais: trocar o
+    /// client secret faz o token antigo deixar de ser encontrado, sem depender
+    /// de alguem lembrar de limpar o cache.
+    /// </summary>
+    private static string TokenKey(BankCredentials credentials) =>
+        credentials.CacheKey + "|" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{credentials.Sandbox}|{credentials.ClientId}|{credentials.ClientSecret}")));
 
     // --- Leitura tolerante do JSON ---
 

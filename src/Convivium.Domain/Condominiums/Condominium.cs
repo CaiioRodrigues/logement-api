@@ -20,6 +20,9 @@ public class Condominium : Entity
 
     public BillingSettings Billing { get; set; } = new();
 
+    /// <summary>Banco que registra os boletos. Vazio enquanto a cobranca for so PIX.</summary>
+    public BoletoSettings Boleto { get; set; } = new();
+
     /// <summary>Chave PIX que recebe as taxas condominiais.</summary>
     public string? PixKey { get; set; }
 

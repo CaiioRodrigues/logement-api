@@ -34,6 +34,21 @@ public class BoletoSettings
     /// <summary>Senha do PKCS#12, cifrada. Nula quando o arquivo nao tem senha.</summary>
     public string? CertificatePasswordCipher { get; set; }
 
+    /// <summary>Titular do certificado, para o sindico conferir que e o do condominio.</summary>
+    public string? CertificateSubject { get; set; }
+
+    /// <summary>
+    /// Validade do certificado. O do Inter vence em um ano, e certificado
+    /// vencido para a emissao de todos os boletos de uma vez — a tela avisa antes.
+    /// </summary>
+    public DateTimeOffset? CertificateExpiresAt { get; set; }
+
+    /// <summary>
+    /// Conta do caixa onde entra o dinheiro dos boletos pagos. Sem ela o
+    /// sistema sabe que o boleto foi pago, mas nao tem onde lancar a entrada.
+    /// </summary>
+    public Guid? BankAccountId { get; set; }
+
     /// <summary>
     /// Conta corrente do condominio, so com digitos. Obrigatoria quando a
     /// aplicacao do banco enxerga mais de uma conta.

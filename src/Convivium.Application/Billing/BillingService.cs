@@ -3,6 +3,7 @@ namespace Convivium.Application.Billing;
 using System.Globalization;
 using System.Security.Cryptography;
 using Convivium.Application.Abstractions;
+using Convivium.Application.Banking;
 using Convivium.Application.Common;
 using Convivium.Domain.Billing;
 using Convivium.Domain.Common;
@@ -403,6 +404,15 @@ public sealed class BillingService(
             payment is null,
             "Esta cobrança não tem recebimento para estornar.");
 
+        // A baixa veio do banco, que continua dizendo que o titulo foi pago:
+        // estornar aqui faria a proxima conferencia lancar tudo de novo.
+        DomainException.ThrowIf(
+            payment!.Method is PaymentMethod.BankSlip
+            && payment.ExternalId is not null
+            && payment.ExternalId == charge.ExternalSlipId,
+            "Este recebimento foi confirmado pelo banco e não pode ser estornado aqui. " +
+            "Se o dinheiro voltou para o morador, lance a devolução como saída no caixa.");
+
         LedgerEntry? entry = await db.LedgerEntries
             .FirstOrDefaultAsync(e => e.PaymentId == payment!.Id, cancellationToken);
 
@@ -604,6 +614,13 @@ public sealed class BillingService(
             charge.PaidAmount > 0,
             "Cobrança com pagamento registrado não pode ser cancelada. Estorne o pagamento antes.");
 
+        // Cancelar so aqui deixaria o titulo vivo na camara de compensacao: o
+        // morador ainda conseguiria pagar uma cobranca que nao existe mais.
+        DomainException.ThrowIf(
+            charge.SlipState is BoletoState.Pending or BoletoState.Registered,
+            "Esta cobrança tem boleto registrado no banco. Cancele o boleto antes, " +
+            "para ele deixar de ser pagável.");
+
         charge.Status = ChargeStatus.Cancelled;
         await db.SaveChangesAsync(cancellationToken);
 
@@ -760,6 +777,7 @@ public sealed class BillingService(
             PublicUrl = options.Value.BuildChargeUrl(charge.PublicToken),
             Notes = notes,
             IsPaid = dto.Status == ChargeStatus.Paid,
+            Slip = BuildSlipDocument(charge, condominium, dto),
         };
     }
 
@@ -960,11 +978,17 @@ public sealed class BillingService(
 
         decimal totalWithLate = charge.OutstandingAmount + late.Total;
 
-        // Vencida: o PIX guardado tem o valor de face, entao regenera com
-        // multa e juros para o morador pagar o valor certo hoje.
-        string? pix = late.Total > 0
-            ? BuildPixPayload(condominium, charge, totalWithLate)
-            : charge.PixPayload;
+        // Com boleto registrado, o PIX e o do banco: pagar por ele da baixa no
+        // titulo e o proprio banco calcula multa e juros. O PIX avulso do
+        // condominio cairia na conta do mesmo jeito, mas deixaria o boleto
+        // em aberto na camara de compensacao.
+        // Sem boleto e vencida: o PIX guardado tem o valor de face, entao
+        // regenera com multa e juros para o morador pagar o valor certo hoje.
+        string? pix = charge.SlipState is BoletoState.Registered && charge.SlipPixPayload is { Length: > 0 } bankPix
+            ? bankPix
+            : late.Total > 0
+                ? BuildPixPayload(condominium, charge, totalWithLate)
+                : charge.PixPayload;
 
         return new ChargeDto(
             charge.Id,
@@ -990,7 +1014,80 @@ public sealed class BillingService(
             charge.Items
                 .OrderBy(i => i.Sort)
                 .Select(i => new ChargeItemDto(i.Id, i.Kind, i.Description, i.Amount))
-                .ToList());
+                .ToList(),
+            ToSlipDto(charge));
+    }
+
+    private static BankSlipDto? ToSlipDto(Charge charge) => charge.SlipState is not { } state
+        ? null
+        : new BankSlipDto(
+            state,
+            FormatDigitableLine(charge.BarcodeLine),
+            charge.SlipBarcode,
+            charge.SlipOurNumber,
+            charge.SlipIssuedAt,
+            charge.SlipSyncedAt,
+            NeedsBankCheck: state is BoletoState.Pending && charge.ExternalSlipId is null);
+
+    /// <summary>
+    /// Pontua a linha digitavel guardada. Ela entrou conferida, mas uma
+    /// listagem nao pode cair por causa de um registro mexido a mao: nesse
+    /// caso sai crua.
+    /// </summary>
+    private static string? FormatDigitableLine(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        try
+        {
+            return BoletoLayout.FormatDigitableLine(line);
+        }
+        catch (DomainException)
+        {
+            return line;
+        }
+    }
+
+    /// <summary>
+    /// A ficha de compensacao, so para boleto registrado e ainda pagavel.
+    /// Valor e vencimento saem do proprio codigo de barras — e o que o banco
+    /// vai cobrar, independente do que estiver escrito no resto do papel.
+    /// </summary>
+    private BankSlipDocument? BuildSlipDocument(Charge charge, Condominium condominium, ChargeDto dto)
+    {
+        if (charge.SlipState is not BoletoState.Registered || dto.Status is ChargeStatus.Paid)
+        {
+            return null;
+        }
+
+        if (BoletoLayout.TryParse(charge.SlipBarcode, clock.Today) is not { } slip)
+        {
+            return null;
+        }
+
+        string unit = dto.UnitIdentifier;
+
+        return new BankSlipDocument
+        {
+            BankName = BankDirectory.NameOf(slip.BankCode),
+            BankCode = BoletoLayout.BankCodeWithCheckDigit(slip.BankCode),
+            DigitableLine = slip.FormattedDigitableLine,
+            Barcode = slip.Barcode,
+            OurNumber = charge.SlipOurNumber,
+            DocumentNumber = $"{charge.Competence.Year % 100:00}{charge.Competence.Month:00}-" +
+                new string(unit.Where(char.IsAsciiLetterOrDigit).ToArray()).ToUpperInvariant(),
+            BeneficiaryName = condominium.LegalName is { Length: > 0 } legal ? legal : condominium.Name,
+            BeneficiaryDocument = condominium.Cnpj,
+            PayerName = charge.Payer?.Name ?? dto.PayerName ?? "Não informado",
+            PayerDocument = charge.Payer?.Cpf,
+            PayerAddress = $"{unit} — {condominium.Address}",
+            Amount = slip.Amount,
+            DueDate = slip.DueDate,
+            Instructions = BoletoInstructions.Build(charge.Competence, unit, condominium),
+        };
     }
 
     /// <summary>
