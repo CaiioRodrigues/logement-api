@@ -27,9 +27,9 @@ Let's Encrypt limita as tentativas por semana — melhor conferir com
 Os dois repositorios ficam lado a lado:
 
 ```bash
-git clone https://github.com/CaiioRodrigues/convivium-api.git
-git clone https://github.com/CaiioRodrigues/convivium-web.git
-cd convivium-api/deploy
+git clone https://github.com/CaiioRodrigues/logement-api.git
+git clone https://github.com/CaiioRodrigues/logement-web.git
+cd logement-api/deploy
 ```
 
 Preencha a configuracao:

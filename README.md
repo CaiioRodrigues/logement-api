@@ -3,12 +3,14 @@
 Sistema da **Logement Administradora**: caixa, rateio mensal, cobranças com
 PIX, leitura automática de contas de concessionária e prestação de contas.
 
-API em **ASP.NET Core 10** sobre **PostgreSQL**. O portal (`convivium-web`,
-Next.js) consome esta API.
+API em **ASP.NET Core 10** sobre **PostgreSQL**. O portal
+([`logement-web`](https://github.com/CaiioRodrigues/logement-web), Next.js)
+consome esta API.
 
-> Os repositórios e os namespaces continuam com o nome antigo, `convivium`.
-> É só identificador interno — renomear pastas e `namespace` em 167 arquivos
-> não muda nada para quem usa, e quebraria todo histórico de `git blame`.
+> Os namespaces e as pastas continuam com o nome antigo, `Convivium`. É só
+> identificador interno — renomear `namespace` em 167 arquivos não muda nada
+> para quem usa e quebraria todo histórico de `git blame`. O mesmo vale para
+> o emissor do JWT: trocá-lo invalidaria todo token já emitido.
 
 ---
 
@@ -353,7 +355,7 @@ como separador (`Jwt__SigningKey`, `ConnectionStrings__Default`).
 | `Jwt:SigningKey` | **Obrigatória**, mínimo 32 bytes. A API não sobe sem ela. |
 | `Jwt:AccessTokenMinutes` | Vida do token de acesso (padrão 30) |
 | `App:PublicBaseUrl` | Base do link do boleto que vai no e-mail |
-| `Cors:AllowedOrigins` | Origens do `convivium-web` |
+| `Cors:AllowedOrigins` | Origens do portal |
 | `Email:*` | SMTP, tentativas e intervalo da fila |
 | `Seed:Enabled` | Popula o demo (só em Development) |
 
