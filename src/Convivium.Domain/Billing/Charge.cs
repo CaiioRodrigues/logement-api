@@ -2,6 +2,7 @@ namespace Convivium.Domain.Billing;
 
 using Convivium.Domain.Common;
 using Convivium.Domain.Condominiums;
+using Convivium.Domain.Payments;
 using Convivium.Domain.People;
 
 /// <summary>
@@ -53,8 +54,38 @@ public class Charge : Entity, ITenantScoped
     /// </summary>
     public string? ExternalSlipId { get; set; }
 
-    /// <summary>Linha digitavel do boleto bancario, quando emitido por um banco.</summary>
+    /// <summary>Linha digitavel do boleto bancario: 47 digitos, sem pontuacao.</summary>
     public string? BarcodeLine { get; set; }
+
+    /// <summary>Codigo de barras do boleto bancario: 44 digitos.</summary>
+    public string? SlipBarcode { get; set; }
+
+    /// <summary>"Nosso numero": a identificacao do titulo na carteira do banco.</summary>
+    public string? SlipOurNumber { get; set; }
+
+    /// <summary>
+    /// Copia-e-cola do PIX embutido no boleto hibrido pelo proprio banco.
+    /// </summary>
+    /// <remarks>
+    /// Diferente de <see cref="PixPayload"/>, que e o PIX avulso do condominio:
+    /// pagar por este aqui da baixa no titulo registrado, e o banco avisa. Pagar
+    /// pelo avulso cai na conta do mesmo jeito, mas o boleto continua em aberto
+    /// na camara de compensacao ate alguem baixar na mao.
+    /// </remarks>
+    public string? SlipPixPayload { get; set; }
+
+    /// <summary>Estado do titulo no banco. Nulo quando a cobranca nao tem boleto.</summary>
+    public BoletoState? SlipState { get; set; }
+
+    public DateTimeOffset? SlipIssuedAt { get; set; }
+
+    /// <summary>Ultima vez que o estado do titulo foi conferido com o banco.</summary>
+    public DateTimeOffset? SlipSyncedAt { get; set; }
+
+    /// <summary>O boleto esta registrado no banco e pode ser pago.</summary>
+    public bool HasRegisteredSlip =>
+        SlipState is BoletoState.Registered or BoletoState.Paid
+        && !string.IsNullOrWhiteSpace(SlipBarcode);
 
     public DateTimeOffset? NotifiedAt { get; set; }
 
