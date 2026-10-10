@@ -122,6 +122,41 @@ docker compose exec -T postgres pg_restore \
 Teste a restauracao **antes** de precisar dela. Backup que nunca foi
 restaurado e so um arquivo grande.
 
+## Boleto bancario (Banco Inter)
+
+Opcional. Sem ele a cobranca sai como aviso com PIX, como sempre saiu. Com
+ele, cada cobranca vira um boleto registrado no banco: pagavel em qualquer
+banco ou loterica, com a baixa entrando no caixa sozinha.
+
+O que precisa existir antes, e nada disso e codigo:
+
+1. **Conta PJ do condominio no Inter**, no CNPJ do condominio, com a cobranca
+   ativada. O beneficiario do boleto e o condominio — dinheiro de condominio
+   em conta de terceiro e problema juridico.
+2. **Uma integracao de API** criada no Internet Banking PJ, com permissao de
+   leitura e escrita de boletos. Dali saem o client id, o client secret e os
+   arquivos `.crt` e `.key`.
+3. **CPF de todos os pagadores** no cadastro. O banco nao registra boleto sem
+   o documento de quem paga; a lista de boletos do ciclo mostra quem falta.
+
+No servidor, so a chave `APP_SECRETS_KEY` no `.env` (ver `.env.example`).
+O resto o sindico faz pela tela **Cadastros → Banco e boleto**.
+
+Comece pelo ambiente de **homologacao** do Inter: emita um boleto de teste,
+confira o PDF e so depois desmarque a homologacao.
+
+A baixa automatica funciona por conferencia periodica, sem webhook: a cada
+`BOLETO_CONFERENCIA_MINUTOS` a API pergunta ao banco o estado dos boletos em
+aberto. Nao precisa liberar nada de entrada no firewall.
+
+```bash
+# O que a conferencia andou fazendo
+docker compose logs api | grep -i boleto
+```
+
+Se a API nao alcancar o banco, os erros aparecem ai e na propria tela, com
+a mensagem que o banco deu.
+
 ## Quando alguma coisa nao sobe
 
 **O certificado nao sai.** `docker compose logs caddy`. Quase sempre e DNS

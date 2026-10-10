@@ -66,6 +66,9 @@ services:
       Email__Password: ${SMTP_PASSWORD}
       Email__FromAddress: ${SMTP_FROM}
       Email__FromName: ${SMTP_FROM_NAME}
+      # Vazia, o boleto bancario fica indisponivel e o resto funciona.
+      App__SecretsKey: ${APP_SECRETS_KEY:-}
+      Banking__SyncMinutes: ${BOLETO_CONFERENCIA_MINUTOS:-30}
     networks: [interna]
 
   web:
