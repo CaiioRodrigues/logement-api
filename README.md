@@ -3,12 +3,14 @@
 Sistema da **Logement Administradora**: caixa, rateio mensal, cobranças com
 PIX, leitura automática de contas de concessionária e prestação de contas.
 
-API em **ASP.NET Core 10** sobre **PostgreSQL**. O portal (`convivium-web`,
-Next.js) consome esta API.
+API em **ASP.NET Core 10** sobre **PostgreSQL**. O portal
+([`logement-web`](https://github.com/CaiioRodrigues/logement-web), Next.js)
+consome esta API.
 
-> Os repositórios e os namespaces continuam com o nome antigo, `convivium`.
-> É só identificador interno — renomear pastas e `namespace` em 167 arquivos
-> não muda nada para quem usa, e quebraria todo histórico de `git blame`.
+> Os namespaces e as pastas continuam com o nome antigo, `Convivium`. É só
+> identificador interno — renomear `namespace` em 167 arquivos não muda nada
+> para quem usa e quebraria todo histórico de `git blame`. O mesmo vale para
+> o emissor do JWT: trocá-lo invalidaria todo token já emitido.
 
 ---
 
@@ -281,6 +283,36 @@ Dois caminhos de acesso:
   um por cobrança. É o que permite mandar o boleto para um proprietário que
   nunca criou conta no sistema.
 
+### Boleto bancário registrado (Banco Inter)
+
+Opcional, por condomínio. Com o banco configurado, cada cobrança vira um
+título registrado: pagável em qualquer banco ou lotérica, com PIX do próprio
+banco embutido e baixa automática no caixa.
+
+- **Credenciais por condomínio**, em `Condominium.Boleto`. O beneficiário é o
+  CNPJ do condomínio, nunca o da administradora. Client secret e certificado
+  mTLS ficam cifrados com AES-256-GCM pela chave `App:SecretsKey`, com o id do
+  condomínio na autenticação da cifra.
+- **Nada de dois títulos para a mesma cobrança.** A emissão reserva a cobrança
+  com um `UPDATE` condicional antes de falar com o banco. Resposta perdida
+  (queda de conexão, tempo esgotado, 5xx) deixa a cobrança travada até alguém
+  conferir no internet banking e liberar.
+- **Tudo que o banco devolve é conferido.** O código de barras passa pela
+  aritmética Febraban (`BoletoLayout`) e o valor e o vencimento gravados nele
+  são comparados com os da cobrança. Divergiu, o título é cancelado no banco
+  na hora em vez de ir para o morador.
+- **Fator de vencimento com a virada de 2025.** O campo de 4 dígitos esgotou
+  em 21/02/2025 e reinicia em 1000; os testes ancoram nos marcos públicos.
+- **Baixa automática** pela conferência periódica (`Banking:SyncMinutes`),
+  condomínio a condomínio, lançando o recebimento na conta escolhida pelo
+  síndico. Funciona sem webhook e sem o sistema estar publicado na internet.
+- **Ficha de compensação** no PDF e na imagem do WhatsApp, com o código de
+  barras Interleaved 2 of 5 em 103 mm.
+
+A referência oficial da API do Inter não estava acessível quando o adaptador
+foi escrito; o contrato veio de clientes públicos e está fixado em
+`InterBoletoProviderTests`. Antes da produção, emita em homologação.
+
 ### Leitura de faturas em PDF (`/api/faturas`)
 
 Importa a conta da CEMIG e extrai valor, vencimento, competência,
@@ -353,8 +385,11 @@ como separador (`Jwt__SigningKey`, `ConnectionStrings__Default`).
 | `Jwt:SigningKey` | **Obrigatória**, mínimo 32 bytes. A API não sobe sem ela. |
 | `Jwt:AccessTokenMinutes` | Vida do token de acesso (padrão 30) |
 | `App:PublicBaseUrl` | Base do link do boleto que vai no e-mail |
-| `Cors:AllowedOrigins` | Origens do `convivium-web` |
+| `Cors:AllowedOrigins` | Origens do portal |
 | `Email:*` | SMTP, tentativas e intervalo da fila |
+| `App:SecretsKey` | Chave de 32 bytes em base64 que cifra as credenciais de banco. Sem ela, o boleto bancário fica indisponível. |
+| `Banking:SyncMinutes` | Intervalo da conferência dos boletos com o banco (padrão 30) |
+| `Banking:Inter:*` | Endereços da API do Inter, caso o banco troque de host |
 | `Seed:Enabled` | Popula o demo (só em Development) |
 
 **A chave JWT nunca deve ir para o `appsettings.json` versionado.** Em
@@ -397,9 +432,11 @@ dotnet ef database update \
 
 Coisas conscientemente fora deste primeiro corte:
 
-- **Boleto bancário registrado.** Hoje a cobrança é PIX + PDF próprio. A
-  emissão está atrás de campos já previstos em `Charge` (`ExternalSlipId`,
-  `BarcodeLine`) para plugar um banco ou gateway sem reescrever o módulo.
+- **Webhook do banco.** A baixa do boleto vem da conferência periódica; o
+  webhook do Inter exige o sistema publicado com endereço fixo. A
+  conferência continua valendo como rede de segurança quando ele existir.
+- **Outros bancos para boleto.** A emissão está atrás de `IBoletoProvider`;
+  hoje só o Inter tem adaptador.
 - **Conciliação automática de PIX recebido.** O `txid` já deriva do id da
   cobrança, então o PIX do extrato é rastreável até quem pagou; falta ler o
   extrato.

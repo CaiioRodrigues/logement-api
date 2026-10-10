@@ -10,8 +10,8 @@
 #
 # Os dois repositorios precisam estar lado a lado:
 #
-#   ~/convivium-api/deploy/docker-compose.yml   <- este arquivo
-#   ~/convivium-web/
+#   ~/logement-api/deploy/docker-compose.yml   <- este arquivo
+#   ~/logement-web/
 #
 # Subir:  docker compose --env-file .env up -d --build
 
@@ -47,6 +47,9 @@ services:
     environment:
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
       Jwt__SigningKey: ${JWT_SIGNING_KEY}
+      # Nomes antigos de proposito: emissor e publico do JWT sao
+      # identificadores, nao marca. Troca-los invalida todo token ja emitido
+      # e desloga o predio inteiro no dia do deploy, sem ganho nenhum.
       Jwt__Issuer: convivium-api
       Jwt__Audience: convivium-web
       App__PublicBaseUrl: https://${DOMINIO}
@@ -63,11 +66,14 @@ services:
       Email__Password: ${SMTP_PASSWORD}
       Email__FromAddress: ${SMTP_FROM}
       Email__FromName: ${SMTP_FROM_NAME}
+      # Vazia, o boleto bancario fica indisponivel e o resto funciona.
+      App__SecretsKey: ${APP_SECRETS_KEY:-}
+      Banking__SyncMinutes: ${BOLETO_CONFERENCIA_MINUTOS:-30}
     networks: [interna]
 
   web:
     build:
-      context: ../../convivium-web
+      context: ../../logement-web
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:

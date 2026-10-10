@@ -26,6 +26,10 @@ public sealed class ChargeConfiguration : IEntityTypeConfiguration<Charge>
         builder.Property(c => c.PixPayload).HasMaxLength(512);
         builder.Property(c => c.ExternalSlipId).HasMaxLength(100);
         builder.Property(c => c.BarcodeLine).HasMaxLength(60);
+        builder.Property(c => c.SlipBarcode).HasMaxLength(44);
+        builder.Property(c => c.SlipOurNumber).HasMaxLength(40);
+        builder.Property(c => c.SlipPixPayload).HasMaxLength(512);
+        builder.Ignore(c => c.HasRegisteredSlip);
 
         builder.HasOne(c => c.BillingCycle)
             .WithMany(b => b.Charges)
@@ -55,6 +59,9 @@ public sealed class ChargeConfiguration : IEntityTypeConfiguration<Charge>
         builder.HasIndex(c => new { c.CondominiumId, c.Status, c.DueDate });
         builder.HasIndex(c => new { c.CondominiumId, c.UnitId, c.Competence });
         builder.HasIndex(c => c.PayerPersonId);
+
+        // A conferencia periodica procura so os boletos que ainda podem mudar.
+        builder.HasIndex(c => new { c.CondominiumId, c.SlipState });
 
         builder.Ignore(c => c.OutstandingAmount);
         builder.Ignore(c => c.IsSettled);

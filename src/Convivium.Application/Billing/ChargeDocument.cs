@@ -51,6 +51,50 @@ public sealed record ChargeDocument
     public bool IsPaid { get; init; }
 
     public bool IsOverdue => DaysLate > 0 && !IsPaid;
+
+    /// <summary>
+    /// Ficha de compensacao do boleto registrado. Nula quando a cobranca e so
+    /// PIX — ai o documento continua sendo o aviso de cobranca de antes.
+    /// </summary>
+    public BankSlipDocument? Slip { get; init; }
+}
+
+/// <summary>O que a ficha de compensacao imprime, ja conferido e formatado.</summary>
+public sealed record BankSlipDocument
+{
+    /// <summary>Ex.: "Banco Inter".</summary>
+    public required string BankName { get; init; }
+
+    /// <summary>Codigo do banco com o DV, como sai no cabecalho. Ex.: "077-9".</summary>
+    public required string BankCode { get; init; }
+
+    /// <summary>Linha digitavel pontuada.</summary>
+    public required string DigitableLine { get; init; }
+
+    /// <summary>Os 44 digitos que viram as barras.</summary>
+    public required string Barcode { get; init; }
+
+    public string? OurNumber { get; init; }
+
+    /// <summary>Numero do documento: o "seu numero" enviado ao banco.</summary>
+    public string? DocumentNumber { get; init; }
+
+    public required string BeneficiaryName { get; init; }
+
+    public string? BeneficiaryDocument { get; init; }
+
+    public required string PayerName { get; init; }
+
+    public string? PayerDocument { get; init; }
+
+    public required string PayerAddress { get; init; }
+
+    /// <summary>Valor do titulo — o que esta gravado no codigo de barras.</summary>
+    public required decimal Amount { get; init; }
+
+    public required DateOnly DueDate { get; init; }
+
+    public IReadOnlyList<string> Instructions { get; init; } = [];
 }
 
 /// <summary>Gera o boleto de cobranca, em PDF ou em imagem.</summary>

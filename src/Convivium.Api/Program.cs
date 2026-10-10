@@ -178,6 +178,11 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
+// Chave de credenciais bancarias presente mas invalida derruba a subida, como
+// a do JWT: subir e so falhar quando o sindico abre a tela do banco esconderia
+// o motivo atras de um erro 500. Ausente, o boleto bancario so fica desligado.
+app.Services.GetRequiredService<Convivium.Application.Abstractions.ISecretProtector>();
+
 await app.MigrateAndSeedAsync();
 
 if (trustedProxies.Length > 0)

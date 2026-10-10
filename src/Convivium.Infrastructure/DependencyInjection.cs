@@ -3,8 +3,10 @@ namespace Convivium.Infrastructure;
 using Convivium.Application.Abstractions;
 using Convivium.Application.Auth;
 using Convivium.Application.Accountability;
+using Convivium.Application.Banking;
 using Convivium.Application.Billing;
 using Convivium.Infrastructure.Auth;
+using Convivium.Infrastructure.Banking;
 using Convivium.Infrastructure.Notifications;
 using Convivium.Infrastructure.Documents;
 using Convivium.Infrastructure.Persistence;
@@ -59,6 +61,20 @@ public static class DependencyInjection
         // porque o generico aceita qualquer texto e engoliria os demais.
         services.AddSingleton<IUtilityBillParser, CemigBillParser>();
         services.AddSingleton<IUtilityBillParser, GenericBillParser>();
+
+        // Boleto registrado. O protetor le a chave uma vez; sem ela o sistema
+        // sobe normalmente e so a configuracao do banco fica bloqueada.
+        services.Configure<InterOptions>(configuration.GetSection(InterOptions.SectionName));
+        services.AddSingleton<ISecretProtector>(_ => new AesGcmSecretProtector(configuration["App:SecretsKey"]));
+        services.AddSingleton<BankConnectionPool>();
+        services.AddSingleton<IBankHttpClientSource>(sp => sp.GetRequiredService<BankConnectionPool>());
+
+        // Singleton porque guarda os tokens do banco em memoria: um por
+        // requisicao pediria um token novo a cada boleto emitido.
+        services.AddSingleton<IBoletoProvider, InterBoletoProvider>();
+
+        services.Configure<BankingOptions>(configuration.GetSection(BankingOptions.SectionName));
+        services.AddHostedService<BoletoSyncWorker>();
 
         services.AddScoped<DemoDataSeeder>();
         services.AddScoped<SuperAdminBootstrapper>();
