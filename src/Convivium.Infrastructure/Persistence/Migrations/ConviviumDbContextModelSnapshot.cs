@@ -173,6 +173,39 @@ namespace Convivium.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("public_token");
 
+                    b.Property<decimal?>("SlipAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("slip_amount");
+
+                    b.Property<string>("SlipBarcode")
+                        .HasMaxLength(44)
+                        .HasColumnType("character varying(44)")
+                        .HasColumnName("slip_barcode");
+
+                    b.Property<DateTimeOffset?>("SlipIssuedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("slip_issued_at");
+
+                    b.Property<string>("SlipOurNumber")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("slip_our_number");
+
+                    b.Property<string>("SlipPixPayload")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("slip_pix_payload");
+
+                    b.Property<string>("SlipState")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("slip_state");
+
+                    b.Property<DateTimeOffset?>("SlipSyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("slip_synced_at");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(40)
@@ -209,6 +242,9 @@ namespace Convivium.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_charges_billing_cycle_id_unit_id")
                         .HasFilter("billing_cycle_id IS NOT NULL");
+
+                    b.HasIndex("CondominiumId", "SlipState")
+                        .HasDatabaseName("ix_charges_condominium_id_slip_state");
 
                     b.HasIndex("CondominiumId", "Status", "DueDate")
                         .HasDatabaseName("ix_charges_condominium_id_status_due_date");
@@ -1622,10 +1658,89 @@ namespace Convivium.Infrastructure.Persistence.Migrations
                                 .HasConstraintName("fk_condominiums_condominiums_id");
                         });
 
+                    b.OwnsOne("Convivium.Domain.Condominiums.BoletoSettings", "Boleto", b1 =>
+                        {
+                            b1.Property<Guid>("CondominiumId")
+                                .HasColumnType("uuid")
+                                .HasColumnName("id");
+
+                            b1.Property<Guid?>("BankAccountId")
+                                .HasColumnType("uuid")
+                                .HasColumnName("boleto_bank_account_id");
+
+                            b1.Property<string>("CertificateCipher")
+                                .HasMaxLength(16384)
+                                .HasColumnType("character varying(16384)")
+                                .HasColumnName("boleto_certificate_cipher");
+
+                            b1.Property<DateTimeOffset?>("CertificateExpiresAt")
+                                .HasColumnType("timestamp with time zone")
+                                .HasColumnName("boleto_certificate_expires_at");
+
+                            b1.Property<string>("CertificatePasswordCipher")
+                                .HasMaxLength(1024)
+                                .HasColumnType("character varying(1024)")
+                                .HasColumnName("boleto_certificate_password_cipher");
+
+                            b1.Property<string>("CertificateSubject")
+                                .HasMaxLength(300)
+                                .HasColumnType("character varying(300)")
+                                .HasColumnName("boleto_certificate_subject");
+
+                            b1.Property<string>("CheckingAccount")
+                                .HasMaxLength(20)
+                                .HasColumnType("character varying(20)")
+                                .HasColumnName("boleto_checking_account");
+
+                            b1.Property<string>("ClientId")
+                                .HasMaxLength(200)
+                                .HasColumnType("character varying(200)")
+                                .HasColumnName("boleto_client_id");
+
+                            b1.Property<string>("ClientSecretCipher")
+                                .HasMaxLength(1024)
+                                .HasColumnType("character varying(1024)")
+                                .HasColumnName("boleto_client_secret_cipher");
+
+                            b1.Property<int>("DaysOnAgenda")
+                                .HasColumnType("integer")
+                                .HasColumnName("boleto_days_on_agenda");
+
+                            b1.Property<string>("Instructions")
+                                .HasMaxLength(400)
+                                .HasColumnType("character varying(400)")
+                                .HasColumnName("boleto_instructions");
+
+                            b1.Property<string>("Provider")
+                                .IsRequired()
+                                .HasMaxLength(40)
+                                .HasColumnType("character varying(40)")
+                                .HasColumnName("boleto_provider");
+
+                            b1.Property<bool>("Sandbox")
+                                .HasColumnType("boolean")
+                                .HasColumnName("boleto_sandbox");
+
+                            b1.Property<DateTimeOffset?>("VerifiedAt")
+                                .HasColumnType("timestamp with time zone")
+                                .HasColumnName("boleto_verified_at");
+
+                            b1.HasKey("CondominiumId");
+
+                            b1.ToTable("condominiums");
+
+                            b1.WithOwner()
+                                .HasForeignKey("CondominiumId")
+                                .HasConstraintName("fk_condominiums_condominiums_id");
+                        });
+
                     b.Navigation("Address")
                         .IsRequired();
 
                     b.Navigation("Billing")
+                        .IsRequired();
+
+                    b.Navigation("Boleto")
                         .IsRequired();
                 });
 

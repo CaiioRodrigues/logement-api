@@ -316,6 +316,11 @@ public sealed class BoletoService(
     {
         BoletoState? previous = charge.SlipState;
         string? previousExternalId = charge.ExternalSlipId;
+        decimal? previousAmount = charge.SlipAmount;
+
+        // Valor fechado aqui e usado nos dois lugares: no pedido e na
+        // conferencia do codigo de barras que o banco devolver.
+        decimal amount = decimal.Round(charge.OutstandingAmount, 2, MidpointRounding.AwayFromZero);
 
         // Reserva atomica: so passa quem encontrou a cobranca sem boleto vivo.
         // Dois cliques em "emitir" ao mesmo tempo nao podem virar dois titulos.
@@ -328,6 +333,7 @@ public sealed class BoletoService(
                 set => set
                     .SetProperty(c => c.SlipState, BoletoState.Pending)
                     .SetProperty(c => c.SlipIssuedAt, clock.Now)
+                    .SetProperty(c => c.SlipAmount, amount)
                     .SetProperty(c => c.ExternalSlipId, (string?)null),
                 cancellationToken);
 
@@ -340,6 +346,7 @@ public sealed class BoletoService(
         // SaveChanges grave o que ja esta la, e nao desfaca a reserva.
         charge.SlipState = BoletoState.Pending;
         charge.SlipIssuedAt = clock.Now;
+        charge.SlipAmount = amount;
         charge.ExternalSlipId = null;
 
         BoletoRegistration registration;
@@ -347,9 +354,13 @@ public sealed class BoletoService(
         try
         {
             registration = await provider.IssueAsync(
-                BuildRequest(charge, condominium),
+                BuildRequest(charge, condominium, amount),
                 credentials,
                 cancellationToken);
+        }
+        catch (BoletoProviderException exception) when (exception.SlipMismatch)
+        {
+            throw await ResolveMismatchAsync(charge, provider, credentials, exception, cancellationToken);
         }
         catch (BoletoProviderException exception) when (exception.OutcomeUnknown)
         {
@@ -367,11 +378,13 @@ public sealed class BoletoService(
                     set => set
                         .SetProperty(c => c.SlipState, previous)
                         .SetProperty(c => c.SlipIssuedAt, (DateTimeOffset?)null)
+                        .SetProperty(c => c.SlipAmount, previousAmount)
                         .SetProperty(c => c.ExternalSlipId, previousExternalId),
                     cancellationToken);
 
             charge.SlipState = previous;
             charge.SlipIssuedAt = null;
+            charge.SlipAmount = previousAmount;
             charge.ExternalSlipId = previousExternalId;
 
             throw;
@@ -383,7 +396,58 @@ public sealed class BoletoService(
         return registration.State;
     }
 
-    private BoletoIssueRequest BuildRequest(Charge charge, Condominium condominium)
+    /// <summary>
+    /// O banco registrou um titulo diferente do pedido. Ele e pagavel — so que
+    /// errado —, entao e cancelado no banco na hora. Se nem o cancelamento
+    /// passar, a cobranca fica pendente com o identificador do titulo, e cada
+    /// conferencia seguinte tenta cancelar de novo.
+    /// </summary>
+    /// <returns>A excecao a lancar, com a mensagem do que foi feito.</returns>
+    private async Task<BoletoProviderException> ResolveMismatchAsync(
+        Charge charge,
+        IBoletoProvider provider,
+        BankCredentials credentials,
+        BoletoProviderException mismatch,
+        CancellationToken cancellationToken)
+    {
+        charge.ExternalSlipId = mismatch.ExternalId ?? charge.ExternalSlipId;
+        charge.SlipBarcode = null;
+        charge.BarcodeLine = null;
+        charge.SlipPixPayload = null;
+
+        bool cancelled = false;
+
+        if (charge.ExternalSlipId is { } externalId)
+        {
+            try
+            {
+                await provider.CancelAsync(externalId, "ACERTOS", credentials, cancellationToken);
+                cancelled = true;
+            }
+            catch (BoletoProviderException)
+            {
+                // Fica pendente com o identificador: a proxima conferencia tenta de novo.
+            }
+        }
+
+        charge.SlipState = cancelled ? BoletoState.Cancelled : BoletoState.Pending;
+        charge.SlipSyncedAt = clock.Now;
+        await db.SaveChangesAsync(cancellationToken);
+
+        string unit = UnitName(charge);
+        string outcome = cancelled
+            ? "O título foi cancelado no banco para ninguém pagar o valor errado. Confira a cobrança e emita de novo."
+            : "Não consegui cancelar o título: cancele no internet banking antes que alguém pague. " +
+              "O sistema tenta cancelar de novo na próxima conferência.";
+
+        return new BoletoProviderException(
+            $"{unit}: {mismatch.Message} {outcome}",
+            mismatch,
+            slipMismatch: true,
+            externalId: charge.ExternalSlipId);
+    }
+
+    private BoletoIssueRequest BuildRequest(Charge charge, Condominium condominium, decimal amount)
     {
         Person payer = charge.Payer!;
         Address address = condominium.Address;
@@ -398,7 +462,7 @@ public sealed class BoletoService(
         return new BoletoIssueRequest
         {
             OwnNumber = OwnNumber(charge),
-            Amount = charge.OutstandingAmount,
+            Amount = amount,
             DueDate = charge.DueDate,
             DaysOnAgenda = condominium.Boleto.DaysOnAgenda,
             LateFeeRate = condominium.Billing.LateFeeRate,
@@ -519,10 +583,26 @@ public sealed class BoletoService(
         BankCredentials credentials,
         CancellationToken cancellationToken)
     {
-        BoletoRegistration registration = await provider.QueryAsync(
-            charge.ExternalSlipId!,
-            credentials,
-            cancellationToken);
+        // Enquanto o banco nao devolveu o codigo de barras, o primeiro que vier
+        // ainda precisa ser conferido contra o valor pedido na emissao.
+        BoletoExpectation? expected = charge.SlipBarcode is null && charge.SlipAmount is { } requested
+            ? new BoletoExpectation(requested, charge.DueDate)
+            : null;
+
+        BoletoRegistration registration;
+
+        try
+        {
+            registration = await provider.QueryAsync(
+                charge.ExternalSlipId!,
+                credentials,
+                expected,
+                cancellationToken);
+        }
+        catch (BoletoProviderException exception) when (exception.SlipMismatch)
+        {
+            throw await ResolveMismatchAsync(charge, provider, credentials, exception, cancellationToken);
+        }
 
         Apply(charge, registration);
         charge.SlipSyncedAt = clock.Now;

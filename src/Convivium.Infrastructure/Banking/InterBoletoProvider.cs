@@ -4,7 +4,6 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -41,6 +40,8 @@ public sealed class InterBoletoProvider(
 {
     private const string CobrancaPath = "cobranca/v3/cobrancas";
 
+    private static readonly CultureInfo Brazil = CultureInfo.GetCultureInfo("pt-BR");
+
     /// <summary>Margem para nao usar um token que expira no meio da chamada.</summary>
     private static readonly TimeSpan TokenSafetyMargin = TimeSpan.FromSeconds(60);
 
@@ -64,7 +65,7 @@ public sealed class InterBoletoProvider(
             HttpMethod.Post,
             CobrancaPath,
             credentials,
-            JsonContent.Create(BuildEmissionBody(request)),
+            Json(BuildEmissionBody(request)),
             cancellationToken,
             createsTitle: true);
 
@@ -81,14 +82,27 @@ public sealed class InterBoletoProvider(
 
         // A emissao e assincrona; a primeira consulta costuma ja trazer o
         // codigo de barras, e quando nao traz o titulo fica pendente.
-        return await QueryAsync(externalId, credentials, request, cancellationToken);
-    }
+        try
+        {
+            return await QueryAsync(
+                externalId,
+                credentials,
+                new BoletoExpectation(request.Amount, request.DueDate),
+                cancellationToken);
+        }
+        catch (BoletoProviderException exception) when (!exception.SlipMismatch)
+        {
+            // A emissao passou — ha codigo de solicitacao — e so a consulta
+            // falhou. O titulo existe; a proxima conferencia busca o codigo de
+            // barras. Tratar isto como erro liberaria uma segunda emissao.
+            logger.LogWarning(
+                exception,
+                "Boleto {ExternalId} emitido, mas a consulta logo depois falhou; fica pendente.",
+                externalId);
 
-    public Task<BoletoRegistration> QueryAsync(
-        string externalId,
-        BankCredentials credentials,
-        CancellationToken cancellationToken = default) =>
-        QueryAsync(externalId, credentials, expected: null, cancellationToken);
+            return new BoletoRegistration { ExternalId = externalId, State = BoletoState.Pending };
+        }
+    }
 
     public async Task CancelAsync(
         string externalId,
@@ -102,7 +116,7 @@ public sealed class InterBoletoProvider(
             HttpMethod.Post,
             $"{CobrancaPath}/{Uri.EscapeDataString(externalId)}/cancelar",
             credentials,
-            JsonContent.Create(new { motivoCancelamento = CancellationReason(reason) }),
+            Json(new { motivoCancelamento = CancellationReason(reason) }),
             cancellationToken);
 
         logger.LogInformation("Boleto {ExternalId} cancelado no Inter.", externalId);
@@ -141,11 +155,11 @@ public sealed class InterBoletoProvider(
 
     // --- Consulta e leitura do titulo ---
 
-    private async Task<BoletoRegistration> QueryAsync(
+    public async Task<BoletoRegistration> QueryAsync(
         string externalId,
         BankCredentials credentials,
-        BoletoIssueRequest? expected,
-        CancellationToken cancellationToken)
+        BoletoExpectation? expected = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(externalId);
 
@@ -162,7 +176,7 @@ public sealed class InterBoletoProvider(
     private BoletoRegistration ReadRegistration(
         string externalId,
         JsonElement root,
-        BoletoIssueRequest? expected)
+        BoletoExpectation? expected)
     {
         string? situation = FindString(root, "cobranca.situacao", "situacao");
         BoletoState state = MapState(situation);
@@ -170,7 +184,7 @@ public sealed class InterBoletoProvider(
         string? digitableLine = FindString(root, "boleto.linhaDigitavel", "linhaDigitavel");
         string? barcode = FindString(root, "boleto.codigoBarras", "codigoBarras");
 
-        BankSlip? slip = ReadSlip(barcode ?? digitableLine, expected, situation);
+        BankSlip? slip = ReadSlip(externalId, barcode ?? digitableLine, expected, situation);
 
         // O banco pode dizer "a receber" antes de publicar o codigo de barras.
         // Sem codigo de barras nao ha boleto pagavel, entao o estado real ainda
@@ -199,7 +213,16 @@ public sealed class InterBoletoProvider(
     /// Confere digito a digito o que o banco devolveu e recusa o que nao bate
     /// com o que foi pedido.
     /// </summary>
-    private BankSlip? ReadSlip(string? value, BoletoIssueRequest? expected, string? situation)
+    /// <remarks>
+    /// A recusa sai marcada como <see cref="BoletoProviderException.SlipMismatch"/>
+    /// e leva o identificador do titulo: ele existe no banco e e pagavel, so
+    /// que errado. Quem chama precisa cancela-lo, nao apenas desistir dele.
+    /// </remarks>
+    private BankSlip? ReadSlip(
+        string externalId,
+        string? value,
+        BoletoExpectation? expected,
+        string? situation)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -215,9 +238,10 @@ public sealed class InterBoletoProvider(
         catch (DomainException exception)
         {
             throw new BoletoProviderException(
-                $"O código de barras devolvido pelo Inter não é válido: {exception.Message} " +
-                "O boleto não foi aceito aqui para não ser cobrado errado.",
-                exception);
+                $"O código de barras devolvido pelo Inter não é válido: {exception.Message}",
+                exception,
+                slipMismatch: true,
+                externalId: externalId);
         }
 
         if (expected is null)
@@ -225,20 +249,24 @@ public sealed class InterBoletoProvider(
             return slip;
         }
 
-        if (slip.Amount != decimal.Round(expected.Amount, 2, MidpointRounding.AwayFromZero))
+        decimal amount = decimal.Round(expected.Amount, 2, MidpointRounding.AwayFromZero);
+
+        if (slip.Amount != amount)
         {
             throw new BoletoProviderException(
-                $"O boleto registrado veio com valor de R$ {slip.Amount:N2}, e a cobrança " +
-                $"é de R$ {expected.Amount:N2}. O título não foi aproveitado; " +
-                $"cancele-o no internet banking antes de emitir de novo. ({situation})");
+                $"O banco registrou o boleto com valor de R$ {slip.Amount.ToString("N2", Brazil)}, " +
+                $"e a cobrança é de R$ {amount.ToString("N2", Brazil)}. ({situation})",
+                slipMismatch: true,
+                externalId: externalId);
         }
 
         if (slip.DueDate != expected.DueDate)
         {
             throw new BoletoProviderException(
-                $"O boleto registrado venceu em {slip.DueDate:dd/MM/yyyy}, e a cobrança " +
-                $"vence em {expected.DueDate:dd/MM/yyyy}. O título não foi aproveitado; " +
-                $"cancele-o no internet banking antes de emitir de novo. ({situation})");
+                $"O banco registrou o boleto com vencimento em {slip.DueDate.ToString("dd/MM/yyyy", Brazil)}, " +
+                $"e a cobrança vence em {expected.DueDate.ToString("dd/MM/yyyy", Brazil)}. ({situation})",
+                slipMismatch: true,
+                externalId: externalId);
         }
 
         return slip;
@@ -363,6 +391,17 @@ public sealed class InterBoletoProvider(
         };
 
     // --- Transporte ---
+
+    /// <summary>
+    /// Corpo JSON com tamanho conhecido.
+    /// </summary>
+    /// <remarks>
+    /// O <c>JsonContent</c> do .NET serializa em fluxo e manda o corpo
+    /// "chunked", sem Content-Length. Gateway de banco costuma recusar isso —
+    /// ou pior, ler um corpo vazio e responder que faltam todos os campos.
+    /// </remarks>
+    private static StringContent Json(object body) =>
+        new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
 
     /// <param name="createsTitle">
     /// A chamada registra um titulo. Se ela falhar depois de sair daqui, nao

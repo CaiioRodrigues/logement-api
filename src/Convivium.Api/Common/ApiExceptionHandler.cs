@@ -1,6 +1,7 @@
 namespace Convivium.Api.Common;
 
 using Convivium.Application.Auth;
+using Convivium.Application.Banking;
 using Convivium.Domain.Common;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -25,6 +26,10 @@ public sealed class ApiExceptionHandler(
         (int status, string title) = exception switch
         {
             DomainException => (StatusCodes.Status422UnprocessableEntity, "Operação não permitida"),
+
+            // 502: o pedido daqui estava certo, quem falhou foi o banco. A
+            // mensagem passa adiante porque traz o motivo que o banco deu.
+            BoletoProviderException => (StatusCodes.Status502BadGateway, "O banco recusou ou não respondeu"),
             AuthenticationFailedException => (StatusCodes.Status401Unauthorized, "Não autenticado"),
             KeyNotFoundException => (StatusCodes.Status404NotFound, "Recurso não encontrado"),
             ArgumentException => (StatusCodes.Status400BadRequest, "Requisição inválida"),
@@ -34,6 +39,10 @@ public sealed class ApiExceptionHandler(
         if (status == StatusCodes.Status500InternalServerError)
         {
             logger.LogError(exception, "Erro não tratado em {Path}", httpContext.Request.Path);
+        }
+        else if (exception is BoletoProviderException)
+        {
+            logger.LogWarning(exception, "Falha do banco em {Path}", httpContext.Request.Path);
         }
 
         httpContext.Response.StatusCode = status;
@@ -51,6 +60,12 @@ public sealed class ApiExceptionHandler(
                 Detail = status == StatusCodes.Status500InternalServerError
                     ? "Não foi possível concluir a operação."
                     : exception.Message,
+
+                // A tela precisa saber quando a emissao pode ter passado, para
+                // pedir conferencia no internet banking em vez de "tente de novo".
+                Extensions = exception is BoletoProviderException { OutcomeUnknown: true }
+                    ? new Dictionary<string, object?> { ["outcomeUnknown"] = true }
+                    : new Dictionary<string, object?>(),
             },
         });
     }

@@ -77,6 +77,13 @@ public class Charge : Entity, ITenantScoped
     /// <summary>Estado do titulo no banco. Nulo quando a cobranca nao tem boleto.</summary>
     public BoletoState? SlipState { get; set; }
 
+    /// <summary>
+    /// Valor pedido ao banco na emissao. O codigo de barras que voltar tem de
+    /// trazer exatamente este valor — e a conferencia que pega um titulo
+    /// registrado errado, mesmo quando o banco so devolve o codigo depois.
+    /// </summary>
+    public decimal? SlipAmount { get; set; }
+
     public DateTimeOffset? SlipIssuedAt { get; set; }
 
     /// <summary>Ultima vez que o estado do titulo foi conferido com o banco.</summary>

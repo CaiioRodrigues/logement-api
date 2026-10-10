@@ -33,9 +33,15 @@ public interface IBoletoProvider
         CancellationToken cancellationToken = default);
 
     /// <summary>Como esta o titulo no banco agora.</summary>
+    /// <param name="expected">
+    /// Valor e vencimento pedidos na emissao. Quando informado, um codigo de
+    /// barras que nao bata com eles e recusado com
+    /// <see cref="BoletoProviderException.SlipMismatch"/>.
+    /// </param>
     Task<BoletoRegistration> QueryAsync(
         string externalId,
         BankCredentials credentials,
+        BoletoExpectation? expected = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Baixa o titulo antes do vencimento: ele deixa de ser pagavel.</summary>
@@ -85,6 +91,9 @@ public sealed record BankCredentials
 
     public override string ToString() => $"BankCredentials {{ CacheKey = {CacheKey}, Sandbox = {Sandbox} }}";
 }
+
+/// <summary>O que o codigo de barras devolvido pelo banco tem de trazer.</summary>
+public sealed record BoletoExpectation(decimal Amount, DateOnly DueDate);
 
 /// <summary>O que o banco precisa saber para registrar o titulo.</summary>
 public sealed record BoletoIssueRequest
@@ -179,8 +188,20 @@ public sealed record BoletoRegistration
 public sealed class BoletoProviderException(
     string message,
     Exception? innerException = null,
-    bool outcomeUnknown = false) : Exception(message, innerException)
+    bool outcomeUnknown = false,
+    bool slipMismatch = false,
+    string? externalId = null) : Exception(message, innerException)
 {
+    /// <summary>
+    /// O titulo existe no banco, mas com valor, vencimento ou codigo de barras
+    /// diferentes do que foi pedido. Quem recebe isto precisa cancelar o
+    /// titulo — ele e pagavel, so que errado.
+    /// </summary>
+    public bool SlipMismatch { get; } = slipMismatch;
+
+    /// <summary>Identificador do titulo no banco, quando ele chegou a existir.</summary>
+    public string? ExternalId { get; } = externalId;
+
     /// <summary>
     /// O pedido pode ter chegado ao banco mesmo com o erro.
     /// </summary>

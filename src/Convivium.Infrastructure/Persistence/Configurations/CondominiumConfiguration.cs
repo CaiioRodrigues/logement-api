@@ -34,6 +34,21 @@ public sealed class CondominiumConfiguration : IEntityTypeConfiguration<Condomin
             billing.Property(b => b.LateFeeRate).HasPrecision(9, 6);
             billing.Property(b => b.MonthlyInterestRate).HasPrecision(9, 6);
         });
+
+        // Os campos *Cipher guardam o texto ja cifrado pelo ISecretProtector,
+        // em base64. O certificado e o maior: um PKCS#12 com cadeia cabe com
+        // folga em 16 KB depois de cifrado e codificado.
+        builder.OwnsOne(c => c.Boleto, boleto =>
+        {
+            boleto.Property(b => b.ClientId).HasMaxLength(200);
+            boleto.Property(b => b.ClientSecretCipher).HasMaxLength(1024);
+            boleto.Property(b => b.CertificateCipher).HasMaxLength(16384);
+            boleto.Property(b => b.CertificatePasswordCipher).HasMaxLength(1024);
+            boleto.Property(b => b.CertificateSubject).HasMaxLength(300);
+            boleto.Property(b => b.CheckingAccount).HasMaxLength(20);
+            boleto.Property(b => b.Instructions).HasMaxLength(400);
+            boleto.Ignore(b => b.IsConfigured);
+        });
     }
 }
 
