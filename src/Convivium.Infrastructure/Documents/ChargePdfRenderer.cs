@@ -107,7 +107,7 @@ public sealed class ChargePdfRenderer : IChargeDocumentRenderer
 
                 row.ConstantItem(130).AlignRight().Column(badge =>
                 {
-                    badge.Item().AlignRight().Text("AVISO DE COBRANÇA")
+                    badge.Item().AlignRight().Text(document.Slip is null ? "AVISO DE COBRANÇA" : "BOLETO BANCÁRIO")
                         .FontSize(8).SemiBold().FontColor(Muted).LetterSpacing(0.08f);
 
                     (string label, string color) = document switch
@@ -131,7 +131,9 @@ public sealed class ChargePdfRenderer : IChargeDocumentRenderer
     {
         container.Column(column =>
         {
-            column.Spacing(16);
+            // Com ficha de compensacao a folha fica mais cheia; espacamento
+            // menor mantem cobranca e ficha na mesma pagina para o caso comum.
+            column.Spacing(document.Slip is null ? 16 : 10);
 
             // Identificacao
             column.Item().Row(row =>
@@ -162,10 +164,12 @@ public sealed class ChargePdfRenderer : IChargeDocumentRenderer
                     header.Cell().Element(HeaderCell).AlignRight().Text("Valor (R$)");
                 });
 
+                Func<IContainer, IContainer> bodyCell = document.Slip is null ? BodyCell : CompactBodyCell;
+
                 foreach (ChargeItemDto item in document.Items)
                 {
-                    table.Cell().Element(BodyCell).Text(item.Description);
-                    table.Cell().Element(BodyCell).AlignRight().Text(Money(item.Amount));
+                    table.Cell().Element(bodyCell).Text(item.Description);
+                    table.Cell().Element(bodyCell).AlignRight().Text(Money(item.Amount));
                 }
             });
 
@@ -202,10 +206,17 @@ public sealed class ChargePdfRenderer : IChargeDocumentRenderer
                 });
             });
 
+            // Linha digitavel logo abaixo do total: e o que o morador copia
+            // para pagar no aplicativo do banco quando nao usa o PIX.
+            if (!document.IsPaid && document.Slip is { } slipLine)
+            {
+                column.Item().Element(cell => ComposeDigitableLine(cell, slipLine));
+            }
+
             // PIX
             if (!document.IsPaid && !string.IsNullOrWhiteSpace(document.PixPayload))
             {
-                column.Item().Element(cell => ComposePix(cell, document.PixPayload));
+                column.Item().Element(cell => ComposePix(cell, document.PixPayload, fromBank: document.Slip is not null));
             }
 
             if (!string.IsNullOrWhiteSpace(document.Notes))
@@ -228,14 +239,149 @@ public sealed class ChargePdfRenderer : IChargeDocumentRenderer
                         "O valor se altera a cada dia de atraso.");
                 });
             }
+
+            // A ficha vai inteira na mesma pagina: cortada ao meio, a leitora
+            // do caixa nao acha o codigo de barras.
+            if (!document.IsPaid && document.Slip is { } slip)
+            {
+                column.Item().ShowEntire().Element(cell => ComposeSlip(cell, slip));
+            }
         });
     }
 
-    private static void ComposePix(IContainer container, string payload)
+    private static void ComposeDigitableLine(IContainer container, BankSlipDocument slip)
     {
-        container.Border(1).BorderColor(Line).Padding(12).Row(row =>
+        container.Background("#f9fafb").Border(1).BorderColor(Line).PaddingVertical(7).PaddingHorizontal(10).Column(column =>
         {
-            row.ConstantItem(108).Image(QrCodeRenderer.Png(payload)).FitArea();
+            column.Item().Text($"Linha digitável — {slip.BankName}")
+                .FontSize(7.5f).SemiBold().FontColor(Muted).LetterSpacing(0.06f);
+
+            column.Item().PaddingTop(3).Text(slip.DigitableLine)
+                .FontSize(12.5f).SemiBold().LetterSpacing(0.03f);
+        });
+    }
+
+    /// <summary>
+    /// A ficha de compensacao: a parte do boleto que o caixa le. Segue o
+    /// desenho de sempre — cabecalho com banco e linha digitavel, grade de
+    /// campos, pagador e o codigo de barras embaixo — porque e o desenho que
+    /// operador de caixa e aplicativo de banco reconhecem.
+    /// </summary>
+    private static void ComposeSlip(IContainer container, BankSlipDocument slip)
+    {
+        container.Column(column =>
+        {
+            // Linha de corte
+            column.Item().PaddingTop(4).PaddingBottom(8).Row(row =>
+            {
+                row.AutoItem().AlignMiddle().Text("Recorte aqui").FontSize(7).FontColor(Muted);
+                row.RelativeItem().PaddingLeft(6).AlignMiddle().LineHorizontal(0.75f).LineColor(Muted);
+            });
+
+            // Cabecalho: banco | codigo | linha digitavel
+            column.Item().BorderBottom(1.5f).BorderColor(Ink).PaddingBottom(3).Row(row =>
+            {
+                row.ConstantItem(110).AlignBottom().Text(slip.BankName).FontSize(13).Bold();
+
+                row.ConstantItem(56).BorderLeft(1.5f).BorderRight(1.5f).BorderColor(Ink)
+                    .AlignCenter().AlignBottom().Text(slip.BankCode).FontSize(13).Bold();
+
+                row.RelativeItem().AlignRight().AlignBottom().Text(slip.DigitableLine)
+                    .FontSize(10.5f).SemiBold();
+            });
+
+            column.Item().BorderLeft(0.75f).BorderColor(Muted).Table(table =>
+            {
+                table.ColumnsDefinition(columns =>
+                {
+                    columns.RelativeColumn(3);
+                    columns.RelativeColumn(1);
+                });
+
+                table.Cell().Element(SlipCell).Element(cell =>
+                    SlipField(cell, "Local de pagamento", "Pagável em qualquer banco ou lotérica"));
+                table.Cell().Element(SlipCell).Element(cell =>
+                    SlipField(cell, "Vencimento", slip.DueDate.ToString("dd/MM/yyyy", Brazil), bold: true));
+
+                string beneficiary = string.IsNullOrWhiteSpace(slip.BeneficiaryDocument)
+                    ? slip.BeneficiaryName
+                    : $"{slip.BeneficiaryName} — CNPJ {FormatCnpj(slip.BeneficiaryDocument)}";
+
+                table.Cell().Element(SlipCell).Element(cell => SlipField(cell, "Beneficiário", beneficiary));
+                table.Cell().Element(SlipCell).Element(cell => SlipField(cell, "Nosso número", slip.OurNumber ?? "—"));
+
+                table.Cell().Element(SlipCell).Element(cell =>
+                    SlipField(cell, "Nº do documento", slip.DocumentNumber ?? "—"));
+                table.Cell().Element(SlipCell).Element(cell =>
+                    SlipField(cell, "(=) Valor do documento", Money(slip.Amount), bold: true));
+
+                table.Cell().RowSpan(2).Element(SlipCell).Column(instructions =>
+                {
+                    instructions.Item().Text("Instruções (responsabilidade do beneficiário)")
+                        .FontSize(6.5f).FontColor(Muted);
+
+                    foreach (string line in slip.Instructions)
+                    {
+                        instructions.Item().PaddingTop(1.5f).Text(line).FontSize(8);
+                    }
+                });
+                table.Cell().Element(SlipCell).Element(cell => SlipField(cell, "(+) Mora / Multa", string.Empty));
+                table.Cell().Element(SlipCell).Element(cell => SlipField(cell, "(=) Valor cobrado", string.Empty));
+
+                table.Cell().ColumnSpan(2).Element(SlipCell).Column(payer =>
+                {
+                    payer.Item().Text("Pagador").FontSize(6.5f).FontColor(Muted);
+
+                    string document = string.IsNullOrWhiteSpace(slip.PayerDocument)
+                        ? string.Empty
+                        : $" — {FormatDocument(slip.PayerDocument)}";
+
+                    payer.Item().PaddingTop(1).Text($"{slip.PayerName}{document}").FontSize(8.5f).SemiBold();
+                    payer.Item().Text(slip.PayerAddress).FontSize(8);
+                });
+            });
+
+            // Codigo de barras: 103 mm x 13 mm, com margem de silencio dos
+            // dois lados para a leitora achar onde comeca.
+            column.Item().PaddingTop(8).Row(row =>
+            {
+                // FitArea: o desenho tem a proporcao dos 405 modulos e cabe
+                // inteiro na caixa, sem pedir mais largura do que os 103 mm.
+                row.ConstantItem(292, Unit.Point).Height(37).Svg(Interleaved2Of5.Svg(slip.Barcode)).FitArea();
+
+                row.RelativeItem().AlignRight().AlignBottom().Column(label =>
+                {
+                    label.Item().AlignRight().Text("Autenticação mecânica").FontSize(6.5f).FontColor(Muted);
+                    label.Item().AlignRight().Text("Ficha de Compensação").FontSize(8).SemiBold();
+                });
+            });
+        });
+    }
+
+    private static IContainer SlipCell(IContainer container) => container
+        .BorderBottom(0.75f).BorderRight(0.75f).BorderColor(Muted)
+        .PaddingVertical(3).PaddingHorizontal(4);
+
+    private static void SlipField(IContainer container, string label, string value, bool bold = false)
+        => container.Column(column =>
+        {
+            column.Item().Text(label).FontSize(6.5f).FontColor(Muted);
+
+            var text = column.Item().PaddingTop(1).Text(value.Length == 0 ? " " : value).FontSize(8.5f);
+
+            if (bold)
+            {
+                text.Bold();
+            }
+        });
+
+    private static void ComposePix(IContainer container, string payload, bool fromBank)
+    {
+        container.Border(1).BorderColor(Line).Padding(fromBank ? 10 : 12).Row(row =>
+        {
+            // 90 pt ainda da modulo grosso para a camera; a ficha embaixo
+            // precisa do espaco que sobra.
+            row.ConstantItem(fromBank ? 90 : 108).Image(QrCodeRenderer.Png(payload)).FitArea();
 
             row.RelativeItem().PaddingLeft(14).Column(column =>
             {
@@ -243,7 +389,8 @@ public sealed class ChargePdfRenderer : IChargeDocumentRenderer
 
                 column.Item().PaddingTop(2).Text(
                     "Abra o aplicativo do seu banco, escolha PIX, aponte para o QR Code " +
-                    "ou use o código copia e cola abaixo.")
+                    "ou use o código copia e cola abaixo." +
+                    (fromBank ? " O pagamento por PIX dá baixa neste boleto na hora." : string.Empty))
                     .FontSize(8.5f).FontColor(Muted);
 
                 column.Item().PaddingTop(8).Text("Copia e cola")
@@ -310,7 +457,18 @@ public sealed class ChargePdfRenderer : IChargeDocumentRenderer
     private static IContainer BodyCell(IContainer container) => container
         .BorderBottom(1).BorderColor(Line).PaddingVertical(6);
 
+    private static IContainer CompactBodyCell(IContainer container) => container
+        .BorderBottom(1).BorderColor(Line).PaddingVertical(3.5f);
+
     private static string Money(decimal value) => value.ToString("N2", Brazil);
+
+    /// <summary>CPF ou CNPJ pontuado; outro tamanho sai como veio.</summary>
+    private static string FormatDocument(string digits) => digits.Length switch
+    {
+        11 => $"CPF {digits[..3]}.{digits[3..6]}.{digits[6..9]}-{digits[9..]}",
+        14 => $"CNPJ {FormatCnpj(digits)}",
+        _ => digits,
+    };
 
     /// <summary>"12345678000195" -> "12.345.678/0001-95".</summary>
     private static string FormatCnpj(string digits) =>
