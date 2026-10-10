@@ -73,6 +73,9 @@ public static class DependencyInjection
         // requisicao pediria um token novo a cada boleto emitido.
         services.AddSingleton<IBoletoProvider, InterBoletoProvider>();
 
+        services.Configure<BankingOptions>(configuration.GetSection(BankingOptions.SectionName));
+        services.AddHostedService<BoletoSyncWorker>();
+
         services.AddScoped<DemoDataSeeder>();
         services.AddScoped<SuperAdminBootstrapper>();
 
