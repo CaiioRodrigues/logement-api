@@ -337,6 +337,23 @@ public class BoletoLayoutTests
             BoletoLayout.Parse(new string(tampered), new DateOnly(2026, 10, 9)));
     }
 
+    // --- Codigo do banco ---
+
+    /// <summary>
+    /// Os codigos impressos no cabecalho de qualquer boleto em circulacao: se
+    /// a regra estivesse errada, algum destes sairia diferente do papel.
+    /// </summary>
+    [Theory]
+    [InlineData("001", "001-9")]
+    [InlineData("033", "033-7")]
+    [InlineData("077", "077-9")]
+    [InlineData("104", "104-0")]
+    [InlineData("237", "237-2")]
+    [InlineData("341", "341-7")]
+    [InlineData("756", "756-0")]
+    public void CodigoDoBancoSaiComODigitoDoCabecalho(string bank, string expected) =>
+        BoletoLayout.BankCodeWithCheckDigit(bank).ShouldBe(expected);
+
     // --- Os dois algoritmos, reescritos do enunciado da Febraban ---
 
     /// <summary>Modulo 11, pesos 2 a 9 ciclicos da direita para a esquerda; 0, 10 e 11 viram 1.</summary>
